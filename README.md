@@ -1,5 +1,7 @@
 # SiNiSistar 2「全异常状态设定」Mod
 
+> **📦 下载**：[最新版本（Release）](https://github.com/1579486875/SiNiSistar2-AllAbnormalMod/releases/latest) —— 下载 zip 后运行 `install.bat`，安装器会自动查找游戏目录。
+
 > 给《SiNiSistar 2》做的运行时 Mod：把游戏里全部异常状态（70 项）做成一
 > 个可以自由开关、自由调等级的悬浮面板。不修改游戏任何文件，全部通过游戏公开接口调用。
 

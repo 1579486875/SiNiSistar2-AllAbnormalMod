@@ -1,0 +1,9 @@
+# 临时与日志
+*.log
+*.tmp
+Thumbs.db
+desktop.ini
+
+# 安装目标（游戏目录内的内容不属于本仓库）
+Mods/
+MelonLoader/Logs/

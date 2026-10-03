@@ -1,0 +1,24 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v6.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v6.0": {},
+    ".NETCoreApp,Version=v6.0/win-x64": {
+      "Il2CppAssemblyGenerator/0.7.3": {
+        "runtime": {
+          "Il2CppAssemblyGenerator.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Il2CppAssemblyGenerator/0.7.3": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

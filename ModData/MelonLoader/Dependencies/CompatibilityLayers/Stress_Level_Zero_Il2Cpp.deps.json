@@ -1,0 +1,24 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v6.0/win-x64",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v6.0": {},
+    ".NETCoreApp,Version=v6.0/win-x64": {
+      "Stress_Level_Zero_Il2Cpp/0.7.3": {
+        "runtime": {
+          "Stress_Level_Zero_Il2Cpp.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Stress_Level_Zero_Il2Cpp/0.7.3": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}

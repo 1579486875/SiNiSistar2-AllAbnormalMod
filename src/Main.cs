@@ -16,6 +16,7 @@ using UnityEngine.InputSystem;
 
 namespace AllAbnormalMod;
 
+/// <summary>AllAbnormalMod 主类：管理异常状态面板的生命周期、按需加载与状态等级读写。</summary>
 public class Main : MelonMod
 {
 	private static string _modVersion;
@@ -141,6 +142,7 @@ public class Main : MelonMod
 
 	private static float _kbRetryTime;
 
+	/// <summary>模组版本号（Major.Minor.Build），取自程序集版本；读取失败时返回 “?”。</summary>
 	internal static string ModVersion
 	{
 		get
@@ -161,6 +163,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>屏蔽列表文件路径（Mods/AllAbnormalMod_blocked.txt）；取路径失败时返回 null。</summary>
 	private static string BlockedFilePath
 	{
 		get
@@ -176,6 +179,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>模组初始化：载入屏蔽列表、登记危险类型、初始化输入模块，并做签名自检。</summary>
 	public override void OnInitializeMelon()
 	{
 		try
@@ -187,6 +191,7 @@ public class Main : MelonMod
 			}
 			PanelInput.InitIl2Cpp();
 			base.LoggerInstance.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Initialized. [Signature] 大赢经直插白皮赢道&汐蓝 [DYJ-CBWP-YD-XL]");
+			// 签名自检：签名常量被第三方改动时给出告警。
 			if (Signature.Assembled != "大赢经直插白皮赢道&汐蓝")
 			{
 				MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] signature self-check mismatch");
@@ -198,6 +203,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>从 Mods/AllAbnormalMod_blocked.txt 载入被屏蔽的状态类型（每行一个十进制 ID，# 之后为注释）。</summary>
 	private static void LoadBlockedList()
 	{
 		try
@@ -207,18 +213,18 @@ public class Main : MelonMod
 			{
 				return;
 			}
-			string[] array = File.ReadAllLines(blockedFilePath);
-			for (int i = 0; i < array.Length; i++)
+			string[] lines = File.ReadAllLines(blockedFilePath);
+			for (int i = 0; i < lines.Length; i++)
 			{
-				string text = array[i].Trim();
-				int num = text.IndexOf('#');
-				if (num >= 0)
+				string lineText = lines[i].Trim();
+				int commentIndex = lineText.IndexOf('#');
+				if (commentIndex >= 0)
 				{
-					text = text.Substring(0, num).Trim();
+					lineText = lineText.Substring(0, commentIndex).Trim();
 				}
-				if (text.Length != 0 && int.TryParse(text, out var result))
+				if (lineText.Length != 0 && int.TryParse(lineText, out var typeId))
 				{
-					UnavailableTypes.Add(result);
+					UnavailableTypes.Add(typeId);
 				}
 			}
 			if (UnavailableTypes.Count > 0)
@@ -226,11 +232,13 @@ public class Main : MelonMod
 				MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Loaded blocked status list: " + UnavailableTypes.Count + " entries.");
 			}
 		}
+		// 屏蔽文件缺失或损坏时静默跳过，不能影响模组启动。
 		catch
 		{
 		}
 	}
 
+	/// <summary>把无法通过游戏 API 设置的状态类型追加写入屏蔽文件。</summary>
 	private static void SaveBlocked(int type)
 	{
 		try
@@ -251,11 +259,13 @@ public class Main : MelonMod
 				File.AppendAllText(blockedFilePath, type + "   # blocked automatically (cannot be set via game API) [DYJ-CBWP-YD-XL]" + Environment.NewLine);
 			}
 		}
+		// 写屏蔽文件失败（磁盘只读等）不应打断游戏流程。
 		catch
 		{
 		}
 	}
 
+	/// <summary>把某一行标记为不可用；首次发现该类型时写入屏蔽文件并打印警告。</summary>
 	private static void MarkUnavailable(StatusRow row)
 	{
 		if (row != null)
@@ -270,6 +280,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>MelonLoader 每帧回调：带冷却地调用 Tick()，并把反复出现的异常降频打印。</summary>
 	public override void OnUpdate()
 	{
 		if (Time.time < _tickCooldown)
@@ -282,8 +293,10 @@ public class Main : MelonMod
 		}
 		catch (Exception ex)
 		{
+			// 出错后冷却 2 秒，避免每帧抛异常导致日志刷屏。
 			_tickCooldown = Time.time + 2f;
 			string message = ex.Message;
+			// 同一条错误信息 15 秒内只打印一次。
 			if (message != _lastTickError || Time.time - _lastTickErrorTime > 15f)
 			{
 				_lastTickError = message;
@@ -293,6 +306,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>退出时释放所有行引用、名称缓存与 UI 引用，避免 IL2CPP 对象在卸载后被持有。</summary>
 	public override void OnApplicationQuit()
 	{
 		try
@@ -324,6 +338,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>场景切换后重置按需加载缓存，让所有行重新拉取数据。</summary>
 	public override void OnSceneWasLoaded(int buildIndex, string sceneName)
 	{
 		try
@@ -337,6 +352,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>重置按需加载状态、清空行的视觉缓存，并把 UI 标记为需要重建行。</summary>
 	private static void ResetLoadCache()
 	{
 		_loadRequested.Clear();
@@ -366,41 +382,43 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>请求游戏按需加载某个异常类型的数据；已经请求过则直接返回 true。</summary>
 	internal static bool EnsureTypeLoaded(AbnormalType type)
 	{
-		int num = (int)type;
-		if (_loadRequested.Contains(num))
+		int typeId = (int)type;
+		if (_loadRequested.Contains(typeId))
 		{
 			return true;
 		}
-		_loadRequested.Add(num);
-		_loadRequestTime[num] = Time.time;
+		_loadRequested.Add(typeId);
+		_loadRequestTime[typeId] = Time.time;
 		if (!_signatureLoggedLoad)
 		{
 			_signatureLoggedLoad = true;
-			MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] on-demand loader active, first type " + num + " [大赢经直插白皮赢道&汐蓝]");
+			MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] on-demand loader active, first type " + typeId + " [大赢经直插白皮赢道&汐蓝]");
 		}
 		try
 		{
 			AbnormalManager abnormal = ManagerList.Abnormal;
 			if (abnormal == null)
 			{
-				_loadRequested.Remove(num);
-				_loadRequestTime.Remove(num);
+				_loadRequested.Remove(typeId);
+				_loadRequestTime.Remove(typeId);
 				return false;
 			}
-			CancellationToken clt = new CancellationToken();
-			abnormal.LoadAbnormalData(type, clt);
+			CancellationToken token = new CancellationToken();
+			abnormal.LoadAbnormalData(type, token);
 			return true;
 		}
 		catch
 		{
-			_loadRequested.Remove(num);
-			_loadRequestTime.Remove(num);
+			_loadRequested.Remove(typeId);
+			_loadRequestTime.Remove(typeId);
 			return false;
 		}
 	}
 
+	/// <summary>读取指定类型的原始异常数据；过程中任何异常都当作拿不到数据处理。</summary>
 	internal static AbnormalData TryGetData(AbnormalType type)
 	{
 		try
@@ -415,12 +433,12 @@ public class Main : MelonMod
 			{
 				return null;
 			}
-			AbnormalOriginalWrapper value = null;
-			if (!abnormalDict.TryGetValue(type, out value))
+			AbnormalOriginalWrapper wrapper = null;
+			if (!abnormalDict.TryGetValue(type, out wrapper))
 			{
 				return null;
 			}
-			return value?.OriginalData;
+			return wrapper?.OriginalData;
 		}
 		catch
 		{
@@ -428,14 +446,17 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>用户主动关闭面板：同时抑制自动弹出，避免同一帧又被自动打开。</summary>
 	internal static void ClosePanelByUser()
 	{
 		PanelVisible = false;
 		_suppressAutoShow = true;
+		// 记录关闭帧，避免同一帧内又被 Home/Delete 立刻打开。
 		ClosedFrame = Time.frameCount;
 		MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Panel closed by Home/Delete/Backspace.");
 	}
 
+	/// <summary>取得图鉴条件 UI（GalleryConditionUI）：优先用缓存，0.5 秒内只尝试搜索一次。</summary>
 	private static GalleryConditionUI GetCond()
 	{
 		try
@@ -449,6 +470,7 @@ public class Main : MelonMod
 		{
 		}
 		_condCached = null;
+		// 0.5 秒内不重复搜索图鉴 UI，避免每帧遍历对象树。
 		if (Time.time < _condSearchCooldown)
 		{
 			return null;
@@ -480,12 +502,14 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>取得并缓存当前键盘设备；设备失效时清空缓存，1 秒内不重复尝试获取。</summary>
 	private static Keyboard GetCachedKeyboard()
 	{
 		if (_kbCache != null)
 		{
 			try
 			{
+				// 设备已销毁时 added 不可用，需要重新获取键盘对象。
 				if (_kbCache.added)
 				{
 					return _kbCache;
@@ -511,6 +535,7 @@ public class Main : MelonMod
 		return _kbCache;
 	}
 
+	/// <summary>面板主循环：负责面板重建、显示与隐藏、按需加载，以及行的节流刷新。</summary>
 	private static void Tick()
 	{
 		if (_hintWarnUntil > 0f && Time.time >= _hintWarnUntil)
@@ -519,6 +544,7 @@ public class Main : MelonMod
 		}
 		try
 		{
+			// 每帧最多构建 6 行，避免一次性生成大量 UI 造成卡顿。
 			PanelBuilder.StepPendingRows(6);
 		}
 		catch
@@ -609,24 +635,24 @@ public class Main : MelonMod
 			}
 			return;
 		}
-		bool flag = false;
+		bool galleryOpen = false;
 		try
 		{
 			GalleryConditionUI cond = GetCond();
 			if (cond != null && IsCondVisible(cond))
 			{
-				flag = true;
+				galleryOpen = true;
 			}
 		}
 		catch
 		{
 		}
-		if (!flag)
+		if (!galleryOpen)
 		{
 			_suppressAutoShow = false;
 		}
-		bool flag2 = PanelVisible || (flag && !_suppressAutoShow);
-		if (!flag2)
+		bool shouldShow = PanelVisible || (galleryOpen && !_suppressAutoShow);
+		if (!shouldShow)
 		{
 			if (UI.Root.activeSelf)
 			{
@@ -635,12 +661,13 @@ public class Main : MelonMod
 			try
 			{
 				Keyboard cachedKeyboard = GetCachedKeyboard();
+				// 同一帧刚关闭过就不再响应开关，防止抖一下又被打开。
 				if (cachedKeyboard != null && ClosedFrame != Time.frameCount && (cachedKeyboard.homeKey.wasPressedThisFrame || cachedKeyboard.deleteKey.wasPressedThisFrame))
 				{
 					PanelVisible = true;
 					_suppressAutoShow = false;
 					OpenedFrame = Time.frameCount;
-					flag2 = true;
+					shouldShow = true;
 					MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Panel opened by Home/Delete.");
 				}
 			}
@@ -648,7 +675,7 @@ public class Main : MelonMod
 			{
 			}
 		}
-		if (!flag2)
+		if (!shouldShow)
 		{
 			if (UI.Root.activeSelf)
 			{
@@ -671,12 +698,14 @@ public class Main : MelonMod
 		{
 		}
 		float time = Time.time;
+		// 游戏侧数据发生变化时才重建激活集合。
 		if (_activeSetDirty && GetAbnormalList() != null)
 		{
 			_activeSetDirty = false;
 			RebuildActiveSet();
 			RefreshActiveCount(force: true);
 		}
+		// 行刷新节流：有变化时最快 0.05 秒一次，另外 0.5 秒兜底刷新一次。
 		if ((UI.RowsDirty && time - _lastRefresh >= 0.05f) || time - _lastRefresh > 0.5f)
 		{
 			UI.RowsDirty = false;
@@ -686,6 +715,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>判断图鉴条件 UI 是否真的可见：沿父级链收集 CanvasGroup，任一 alpha 小于 0.01 即视为隐藏。</summary>
 	private static bool IsCondVisible(GalleryConditionUI cond)
 	{
 		if (cond == null)
@@ -694,8 +724,8 @@ public class Main : MelonMod
 		}
 		try
 		{
-			GameObject gameObject = cond.gameObject;
-			if (gameObject == null || !gameObject.activeInHierarchy)
+			GameObject condObject = cond.gameObject;
+			if (condObject == null || !condObject.activeInHierarchy)
 			{
 				return false;
 			}
@@ -704,29 +734,30 @@ public class Main : MelonMod
 		{
 			return false;
 		}
+		// 只有换成另一个条件 UI 时才重新收集父级 CanvasGroup 链。
 		if (_condGroupsOwner != cond)
 		{
 			_condGroupsOwner = cond;
 			_condGroups.Clear();
 			try
 			{
-				Transform transform = cond.GetComponent<RectTransform>();
-				int num = 0;
-				while (transform != null && num < 32)
+				Transform node = cond.GetComponent<RectTransform>();
+				int depth = 0;
+				while (node != null && depth < 32)
 				{
 					try
 					{
-						CanvasGroup component = transform.GetComponent<CanvasGroup>();
-						if (component != null)
+						CanvasGroup parentGroup = node.GetComponent<CanvasGroup>();
+						if (parentGroup != null)
 						{
-							_condGroups.Add(component);
+							_condGroups.Add(parentGroup);
 						}
 					}
 					catch
 					{
 					}
-					transform = transform.parent;
-					num++;
+					node = node.parent;
+					depth++;
 				}
 			}
 			catch
@@ -742,6 +773,7 @@ public class Main : MelonMod
 			}
 			try
 			{
+				// 父级链上任一 CanvasGroup 淡出，即认为图鉴界面没有打开。
 				if (canvasGroup.alpha < 0.01f)
 				{
 					return false;
@@ -754,16 +786,18 @@ public class Main : MelonMod
 		return true;
 	}
 
+	/// <summary>调用 PanelBuilder 构建面板并接管返回值；构建异常只记日志，不向外抛出。</summary>
 	private static bool BuildUI()
 	{
 		try
 		{
-			GameObjectsRef gameObjectsRef = PanelBuilder.Build();
-			if (gameObjectsRef == null || gameObjectsRef.Root == null)
+			GameObjectsRef builtUi = PanelBuilder.Build();
+			if (builtUi == null || builtUi.Root == null)
 			{
 				return false;
 			}
-			UI = gameObjectsRef;
+			UI = builtUi;
+			// 置为 -1 以强制下一次刷新计数文本。
 			_lastActiveCount = -1;
 			MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Mod panel ready.");
 			return true;
@@ -775,28 +809,31 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>设置当前选中的行；只刷新新旧两个下标的行。</summary>
 	internal static void SetSelected(int index)
 	{
-		int selectedIndex = _selectedIndex;
+		int previousIndex = _selectedIndex;
 		_selectedIndex = index;
 		_hasSelectedUi = true;
 		RefreshRows();
-		if (selectedIndex != index)
+		if (previousIndex != index)
 		{
-			RefreshRowAt(selectedIndex);
+			RefreshRowAt(previousIndex);
 		}
 	}
 
+	/// <summary>预生成 “Lv0” 到 “Lvmax” 的文本表，避免每帧拼接字符串。</summary>
 	private static string[] BuildLvTextTable(int max)
 	{
-		string[] array = new string[max + 1];
+		string[] table = new string[max + 1];
 		for (int i = 0; i <= max; i++)
 		{
-			array[i] = "Lv" + i;
+			table[i] = "Lv" + i;
 		}
-		return array;
+		return table;
 	}
 
+	/// <summary>刷新单行：等级、状态文本、状态名与背景色，只在值发生变化时才写 UI。</summary>
 	private static void RefreshRow(int index, AbnormalList list, bool probeData)
 	{
 		if (index < 0 || index >= Rows.Count)
@@ -810,8 +847,9 @@ public class Main : MelonMod
 		}
 		try
 		{
-			bool flag = (statusRow.Blocked = statusRow.Blocked || UnavailableTypes.Contains((int)statusRow.Type));
-			if (statusRow.Data == null && !flag && probeData)
+			// 一旦被判定为不可用就永久屏蔽（游戏 API 无法设置该状态）。
+			bool isBlocked = (statusRow.Blocked = statusRow.Blocked || UnavailableTypes.Contains((int)statusRow.Type));
+			if (statusRow.Data == null && !isBlocked && probeData)
 			{
 				statusRow.Data = TryGetData(statusRow.Type);
 				if (statusRow.Data != null)
@@ -821,15 +859,15 @@ public class Main : MelonMod
 					statusRow.LastName = null;
 				}
 			}
-			int num = 0;
+			int currentLevel = 0;
 			if (statusRow.Data != null)
 			{
 				if (list != null)
 				{
 					try
 					{
-						num = (statusRow.ModelLv = list.GetAbnormalLevel(statusRow.Type));
-						if (num > 0)
+						currentLevel = (statusRow.ModelLv = list.GetAbnormalLevel(statusRow.Type));
+						if (currentLevel > 0)
 						{
 							_activeTypes.Add((int)statusRow.Type);
 						}
@@ -840,92 +878,97 @@ public class Main : MelonMod
 					}
 					catch
 					{
-						num = ((statusRow.ModelLv >= 0) ? statusRow.ModelLv : 0);
+						currentLevel = ((statusRow.ModelLv >= 0) ? statusRow.ModelLv : 0);
 					}
 				}
 				else
 				{
-					num = ((statusRow.ModelLv >= 0) ? statusRow.ModelLv : 0);
+					currentLevel = ((statusRow.ModelLv >= 0) ? statusRow.ModelLv : 0);
 				}
 			}
-			int value;
-			int num2 = (flag ? (-2) : ((!(statusRow.Data != null)) ? ((_loadAttempts.TryGetValue((int)statusRow.Type, out value) && value >= 3) ? (-3) : (-1)) : num));
-			if (statusRow.StateText != null && statusRow.LastStateCode != num2)
+			int loadAttempts;
+			// 状态码约定：-3 加载失败 / -2 被屏蔽 / -1 加载中 / 大于等于 0 表示当前等级。
+			int stateCode = (isBlocked ? (-2) : ((!(statusRow.Data != null)) ? ((_loadAttempts.TryGetValue((int)statusRow.Type, out loadAttempts) && loadAttempts >= 3) ? (-3) : (-1)) : currentLevel));
+			if (statusRow.StateText != null && statusRow.LastStateCode != stateCode)
 			{
-				statusRow.LastStateCode = num2;
-				string text;
-				Color color;
-				if (flag)
+				statusRow.LastStateCode = stateCode;
+				string stateLabel;
+				Color stateColor;
+				if (isBlocked)
 				{
-					text = "×";
-					color = StateUnavailableColor;
+					stateLabel = "×";
+					stateColor = StateUnavailableColor;
 				}
 				else
 				{
-					switch (num2)
+					switch (stateCode)
 					{
 					case -3:
-						text = "✗";
-						color = StateUnavailableColor;
+						stateLabel = "✗";
+						stateColor = StateUnavailableColor;
 						break;
 					case -1:
-						text = "…";
-						color = StateLoadingColor;
+						stateLabel = "…";
+						stateColor = StateLoadingColor;
 						break;
 					default:
-						if (num <= 0)
+						if (currentLevel <= 0)
 						{
-							text = "OFF";
-							color = StateOffColor;
+							stateLabel = "OFF";
+							stateColor = StateOffColor;
 						}
 						else
 						{
-							text = ((num < LvText.Length) ? LvText[num] : ("Lv" + num));
-							color = StateOnColor;
+							stateLabel = ((currentLevel < LvText.Length) ? LvText[currentLevel] : ("Lv" + currentLevel));
+							stateColor = StateOnColor;
 						}
 						break;
 					}
 				}
-				statusRow.StateText.text = text;
-				statusRow.StateText.color = color;
+				statusRow.StateText.text = stateLabel;
+				statusRow.StateText.color = stateColor;
 			}
-			if (num != statusRow.LastLv || statusRow.LastName == null || statusRow.LastNameBlocked != flag)
+			// 等级、名称或屏蔽状态有变化时才写 UI，减少文本与颜色赋值开销。
+			if (currentLevel != statusRow.LastLv || statusRow.LastName == null || statusRow.LastNameBlocked != isBlocked)
 			{
-				statusRow.LastLv = num;
+				statusRow.LastLv = currentLevel;
 				if (statusRow.NameText != null)
 				{
-					string statusName = GetStatusName(statusRow, num);
-					if (statusRow.LastName != statusName || statusRow.LastNameBlocked != flag)
+					string statusName = GetStatusName(statusRow, currentLevel);
+					if (statusRow.LastName != statusName || statusRow.LastNameBlocked != isBlocked)
 					{
 						statusRow.LastName = statusName;
-						statusRow.LastNameBlocked = flag;
+						statusRow.LastNameBlocked = isBlocked;
 						statusRow.NameText.text = statusName;
-						statusRow.NameText.color = (flag ? NameBlockedColor : NameNormalColor);
+						statusRow.NameText.color = (isBlocked ? NameBlockedColor : NameNormalColor);
 					}
 				}
 			}
-			bool flag2 = _hasSelectedUi && index == _selectedIndex;
-			if (statusRow.Bg != null && (statusRow.LastSelected != flag2 || statusRow.LastBgLv != num))
+			// 选中高亮：只有被选中的那一行使用选中底色。
+			bool isSelected = _hasSelectedUi && index == _selectedIndex;
+			if (statusRow.Bg != null && (statusRow.LastSelected != isSelected || statusRow.LastBgLv != currentLevel))
 			{
-				statusRow.LastSelected = flag2;
-				statusRow.LastBgLv = num;
-				statusRow.Bg.color = (flag2 ? BgSelectedColor : ((num > 0) ? BgOnColor : BgOffColor));
+				statusRow.LastSelected = isSelected;
+				statusRow.LastBgLv = currentLevel;
+				statusRow.Bg.color = (isSelected ? BgSelectedColor : ((currentLevel > 0) ? BgOnColor : BgOffColor));
 			}
 		}
-		catch (Exception e)
+		catch (Exception ex)
 		{
-			LogRowError(index, e);
+			LogRowError(index, ex);
 		}
 	}
 
-	private static void LogRowError(int index, Exception e)
+	/// <summary>记录行刷新异常；同一下标只记一次，最多打印 5 条。</summary>
+	private static void LogRowError(int index, Exception ex)
 	{
 		if (_rowErrLogged.Add(index) && _rowErrLogged.Count <= 5)
 		{
-			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] row " + index + " refresh failed: " + e.Message);
+			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] row " + index + " refresh failed: " + ex.Message);
 		}
 	}
 
+	/// <summary>刷新指定下标的行（键盘或鼠标操作后调用）。</summary>
 	internal static void RefreshRowAt(int index)
 	{
 		if (index >= 0 && index < Rows.Count)
@@ -934,11 +977,13 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>只做行的视觉初始化：不探测数据、不请求加载。</summary>
 	internal static void InitRowVisual(int index)
 	{
 		RefreshRow(index, null, probeData: false);
 	}
 
+	/// <summary>刷新当前滚动可视范围内的所有行，屏幕外的行跳过以省性能。</summary>
 	private static void RefreshRows()
 	{
 		if (Rows.Count == 0)
@@ -947,28 +992,30 @@ public class Main : MelonMod
 		}
 		AbnormalList abnormalList = GetAbnormalList();
 		bool probeData = abnormalList != null;
-		int num = 0;
-		int num2 = Rows.Count - 1;
+		int firstIndex = 0;
+		int lastIndex = Rows.Count - 1;
 		if (UI != null)
 		{
-			float num3 = UI.RowH + UI.RowSpacing;
+			float rowStride = UI.RowH + UI.RowSpacing;
 			float viewHeight = UI.ViewHeight;
-			if (num3 > 0.01f && viewHeight > 1f)
+			// 只刷新可视区上下各多一行的范围，屏幕外的行不动。
+			if (rowStride > 0.01f && viewHeight > 1f)
 			{
-				num = Mathf.Max(0, Mathf.FloorToInt(UI.ScrollY / num3) - 1);
-				num2 = Mathf.Min(Rows.Count - 1, Mathf.CeilToInt((UI.ScrollY + viewHeight) / num3) + 1);
+				firstIndex = Mathf.Max(0, Mathf.FloorToInt(UI.ScrollY / rowStride) - 1);
+				lastIndex = Mathf.Min(Rows.Count - 1, Mathf.CeilToInt((UI.ScrollY + viewHeight) / rowStride) + 1);
 			}
 		}
-		if (num > num2)
+		if (firstIndex > lastIndex)
 		{
-			num = num2;
+			firstIndex = lastIndex;
 		}
-		for (int i = num; i <= num2; i++)
+		for (int i = firstIndex; i <= lastIndex; i++)
 		{
 			RefreshRow(i, abnormalList, probeData);
 		}
 	}
 
+	/// <summary>解析某等级对应的本地化名称 ID：优先取该等级的名字，取不到则退回整体名称 ID。</summary>
 	private static int ResolveNameId(StatusRow row, int level)
 	{
 		if (level >= 1)
@@ -995,56 +1042,60 @@ public class Main : MelonMod
 		return 0;
 	}
 
-	private static bool IsUsableName(string s)
+	/// <summary>判断一个名字能否作为显示名：非空、不超过 14 字、不含富文本标记与换行。</summary>
+	private static bool IsUsableName(string nameText)
 	{
-		if (string.IsNullOrEmpty(s))
+		if (string.IsNullOrEmpty(nameText))
 		{
 			return false;
 		}
-		if (s.Length > 14)
+		if (nameText.Length > 14)
 		{
 			return false;
 		}
-		if (s.IndexOf("[[", StringComparison.Ordinal) >= 0)
+		// 名字里出现 "[[" 是富文本标记，不能直接当显示名。
+		if (nameText.IndexOf("[[", StringComparison.Ordinal) >= 0)
 		{
 			return false;
 		}
-		if (s.IndexOf('\n') >= 0)
+		if (nameText.IndexOf('\n') >= 0)
 		{
 			return false;
 		}
 		return true;
 	}
 
+	/// <summary>把名称 ID 解析成文本：先查游戏本地化，再退回内置中文名表。</summary>
 	private static string ResolveNameText(int nameId)
 	{
 		if (nameId <= 0)
 		{
 			return null;
 		}
-		string text = null;
+		string localized = null;
 		try
 		{
 			LocalizeManager localize = ManagerList.Localize;
 			if (localize != null)
 			{
-				text = localize.GetLcText((LocalizeID)nameId);
+				localized = localize.GetLcText((LocalizeID)nameId);
 			}
 		}
 		catch
 		{
 		}
-		if (!string.IsNullOrEmpty(text))
+		if (!string.IsNullOrEmpty(localized))
 		{
-			return text;
+			return localized;
 		}
-		if (ZhNames.Table.TryGetValue(nameId, out var value) && IsUsableName(value))
+		if (ZhNames.Table.TryGetValue(nameId, out var zhName) && IsUsableName(zhName))
 		{
-			return value;
+			return zhName;
 		}
 		return null;
 	}
 
+	/// <summary>为某一行建立显示名缓存：取能拿到的第一个等级名，兜底使用类型名表。</summary>
 	internal static void CacheRowName(StatusRow row)
 	{
 		if (row == null || row.Data == null)
@@ -1056,38 +1107,40 @@ public class Main : MelonMod
 		{
 			return;
 		}
-		string value = null;
-		int num = 1;
+		string cachedName = null;
+		int maxLevel = 1;
 		try
 		{
-			num = Mathf.Clamp(row.Data.MaxLevel, 1, 20);
+			// 等级上限封顶 20，与 LvText 表的长度保持一致。
+			maxLevel = Mathf.Clamp(row.Data.MaxLevel, 1, 20);
 		}
 		catch
 		{
 		}
-		for (int i = 1; i <= num; i++)
+		for (int i = 1; i <= maxLevel; i++)
 		{
-			string text = ResolveNameText(ResolveNameId(row, i));
-			if (!string.IsNullOrEmpty(text))
+			string resolved = ResolveNameText(ResolveNameId(row, i));
+			if (!string.IsNullOrEmpty(resolved))
 			{
-				value = text;
+				cachedName = resolved;
 				break;
 			}
 		}
-		if (string.IsNullOrEmpty(value))
+		if (string.IsNullOrEmpty(cachedName))
 		{
-			value = ResolveNameText(ResolveNameId(row, 0));
+			cachedName = ResolveNameText(ResolveNameId(row, 0));
 		}
-		if (string.IsNullOrEmpty(value))
+		if (string.IsNullOrEmpty(cachedName))
 		{
-			value = (TypeNames.Table.TryGetValue(type, out var value2) ? value2 : null);
+			cachedName = (TypeNames.Table.TryGetValue(type, out var fallbackName) ? fallbackName : null);
 		}
-		if (!string.IsNullOrEmpty(value))
+		if (!string.IsNullOrEmpty(cachedName))
 		{
-			NameCache[type] = value;
+			NameCache[type] = cachedName;
 		}
 	}
 
+	/// <summary>取得某行在指定等级下应显示的名称，逐级降级到缓存、名称表与 “#类型ID”。</summary>
 	internal static string GetStatusName(StatusRow row, int level)
 	{
 		if (row == null)
@@ -1097,47 +1150,49 @@ public class Main : MelonMod
 		int type = (int)row.Type;
 		if (row.Data == null)
 		{
-			if (!TypeNames.Table.TryGetValue(type, out var value))
+			if (!TypeNames.Table.TryGetValue(type, out var tableName))
 			{
 				return "#" + type;
 			}
-			return value;
+			return tableName;
 		}
 		try
 		{
-			if (NameCache.TryGetValue(type, out var value2) && !string.IsNullOrEmpty(value2) && !value2.StartsWith("状态") && level < 2)
+			// 游戏对未解锁等级会返回占位名（“状态”开头），低等级时优先使用缓存里的真名。
+			if (NameCache.TryGetValue(type, out var cachedShortName) && !string.IsNullOrEmpty(cachedShortName) && !cachedShortName.StartsWith("状态") && level < 2)
 			{
-				return value2;
+				return cachedShortName;
 			}
 			if (level > 0)
 			{
-				string text = ResolveNameText(ResolveNameId(row, level));
-				if (!string.IsNullOrEmpty(text))
+				string levelName = ResolveNameText(ResolveNameId(row, level));
+				if (!string.IsNullOrEmpty(levelName))
 				{
-					return text;
+					return levelName;
 				}
 			}
-			if (NameCache.TryGetValue(type, out var value3) && !string.IsNullOrEmpty(value3))
+			if (NameCache.TryGetValue(type, out var cachedFallbackName) && !string.IsNullOrEmpty(cachedFallbackName))
 			{
-				return value3;
+				return cachedFallbackName;
 			}
-			string text2 = ResolveNameText(ResolveNameId(row, 1));
-			if (!string.IsNullOrEmpty(text2))
+			string lv1Name = ResolveNameText(ResolveNameId(row, 1));
+			if (!string.IsNullOrEmpty(lv1Name))
 			{
-				return text2;
+				return lv1Name;
 			}
 		}
 		catch
 		{
 		}
-		if (TypeNames.Table.TryGetValue(type, out var value4))
+		if (TypeNames.Table.TryGetValue(type, out var fallbackTableName))
 		{
-			return value4;
+			return fallbackTableName;
 		}
-		int type2 = (int)row.Type;
-		return "异常 " + type2;
+		int typeId = (int)row.Type;
+		return "异常 " + typeId;
 	}
 
+	/// <summary>安全地取得玩家异常状态列表；管理器不可用时返回 null。</summary>
 	internal static AbnormalList GetAbnormalList()
 	{
 		try
@@ -1155,6 +1210,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>重建“已激活状态”集合：遍历全部已知类型查询当前等级。</summary>
 	private static void RebuildActiveSet()
 	{
 		_activeTypes.Clear();
@@ -1179,6 +1235,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>刷新面板上的“已挂:N”计数；未强制且数量未变时直接返回。</summary>
 	private static void RefreshActiveCount(bool force)
 	{
 		if (UI == null || UI.ActiveCountText == null)
@@ -1201,6 +1258,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>判断当前是否只剩最后一个已激活状态（游戏不允许把列表清空）。</summary>
 	private static bool IsLastActiveStatus()
 	{
 		try
@@ -1214,12 +1272,14 @@ public class Main : MelonMod
 		return _activeTypes.Count <= 1;
 	}
 
+	/// <summary>拒绝取消最后一个异常状态时的日志与提示。</summary>
 	private static void WarnKeepLastStatus()
 	{
 		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] refused to remove the last abnormal status (game UI locks up when the list is empty).");
 		ShowHintWarning("注意：最后一个异常状态不能取消 —— 清空后游戏的异常状态界面会卡死，只能重启");
 	}
 
+	/// <summary>返回加护类状态的互斥对偶（不孕加护与丧失加护），其它类型返回 0。</summary>
 	private static int OppositeProtection(int typeId)
 	{
 		return typeId switch
@@ -1230,12 +1290,14 @@ public class Main : MelonMod
 		};
 	}
 
+	/// <summary>两个加护必须二选一、不能都关时的日志与提示。</summary>
 	private static void WarnProtectionPair()
 	{
 		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] refused to remove the last protection buff (barren/loss must keep exactly one).");
 		ShowHintWarning("不孕的加护 / 丧失加护 是二选一的：想换直接点另一个，不能两个都关");
 	}
 
+	/// <summary>加护互换失败后恢复被移除的那个加护；恢复也失败时提示用户重试。</summary>
 	private static void RestoreProtection(AbnormalList list, int typeId, int level)
 	{
 		if (list == null || typeId == 0 || level <= 0)
@@ -1255,8 +1317,10 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>在面板提示栏显示 6 秒警告文本，到时间由 RestoreHint 还原。</summary>
 	private static void ShowHintWarning(string message)
 	{
+		// 6 秒后由 Tick 调用 RestoreHint 还原提示栏。
 		_hintWarnUntil = Time.time + 6f;
 		try
 		{
@@ -1271,6 +1335,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>把提示栏还原成默认的操作说明。</summary>
 	private static void RestoreHint()
 	{
 		_hintWarnUntil = 0f;
@@ -1287,6 +1352,7 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>核心操作：把某行设为目标等级，处理加护互斥、最后一个状态保护与失败回滚。</summary>
 	internal static void ApplyLevel(StatusRow row, int newLevel)
 	{
 		if (row == null)
@@ -1297,6 +1363,7 @@ public class Main : MelonMod
 		if (row.Blocked || UnavailableTypes.Contains(type))
 		{
 			row.Blocked = true;
+			// 点击被屏蔽的行只提示一次，避免刷日志。
 			if (!_loggedBlockedClick)
 			{
 				_loggedBlockedClick = true;
@@ -1314,120 +1381,123 @@ public class Main : MelonMod
 		{
 			return;
 		}
-		int max = 1;
+		int maxLevel = 1;
 		try
 		{
-			max = Mathf.Max(1, row.Data.MaxLevel);
+			maxLevel = Mathf.Max(1, row.Data.MaxLevel);
 		}
 		catch
 		{
 		}
-		int num = Mathf.Clamp(newLevel, 0, max);
-		int num2 = 0;
+		int targetLevel = Mathf.Clamp(newLevel, 0, maxLevel);
+		int currentLevel = 0;
 		try
 		{
-			num2 = abnormalList.GetAbnormalLevel(row.Type);
+			currentLevel = abnormalList.GetAbnormalLevel(row.Type);
 		}
 		catch
 		{
 		}
-		if (num2 == num)
+		if (currentLevel == targetLevel)
 		{
 			return;
 		}
-		int num3 = OppositeProtection(type);
-		int level = 0;
-		if (num3 != 0)
+		int oppositeType = OppositeProtection(type);
+		int removedOppositeLevel = 0;
+		// 加护是二选一的：设置新加护前先移除旧的那个，失败时回滚。
+		if (oppositeType != 0)
 		{
-			int num4 = 0;
+			int oppositeLevel = 0;
 			try
 			{
-				num4 = abnormalList.GetAbnormalLevel((AbnormalType)num3);
+				oppositeLevel = abnormalList.GetAbnormalLevel((AbnormalType)oppositeType);
 			}
 			catch
 			{
 			}
-			if (num <= 0)
+			if (targetLevel <= 0)
 			{
-				if (num4 <= 0)
+				if (oppositeLevel <= 0)
 				{
 					WarnProtectionPair();
 					return;
 				}
 			}
-			else if (num4 > 0)
+			else if (oppositeLevel > 0)
 			{
 				try
 				{
-					abnormalList.RemoveAbnormal((AbnormalType)num3);
-					_activeTypes.Remove(num3);
-					level = num4;
-					MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] protection pair: swapped " + num3 + " -> " + type + ".");
+					abnormalList.RemoveAbnormal((AbnormalType)oppositeType);
+					_activeTypes.Remove(oppositeType);
+					removedOppositeLevel = oppositeLevel;
+					MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] protection pair: swapped " + oppositeType + " -> " + type + ".");
 				}
 				catch (Exception ex)
 				{
-					MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] protection pair swap failed: type " + num3 + ", msg=" + ex.Message);
+					MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] protection pair swap failed: type " + oppositeType + ", msg=" + ex.Message);
 				}
 			}
 		}
-		if (num <= 0 && num2 > 0 && IsLastActiveStatus())
+		// 游戏在异常状态列表为空时会卡死，因此禁止取消最后一个状态。
+		if (targetLevel <= 0 && currentLevel > 0 && IsLastActiveStatus())
 		{
 			WarnKeepLastStatus();
 			return;
 		}
-		if (num > 0)
+		if (targetLevel > 0)
 		{
-			bool flag = false;
-			bool flag2 = false;
+			bool hasLevelData = false;
+			bool probeFailed = false;
 			try
 			{
-				flag = row.Data.GetAbnormalOne(num) != null;
+				// 目标等级没有对应数据，说明该状态无法通过 API 设置。
+				hasLevelData = row.Data.GetAbnormalOne(targetLevel) != null;
 			}
 			catch
 			{
-				flag2 = true;
+				probeFailed = true;
 			}
-			if (flag2)
+			if (probeFailed)
 			{
-				RestoreProtection(abnormalList, num3, level);
+				RestoreProtection(abnormalList, oppositeType, removedOppositeLevel);
 				return;
 			}
-			if (!flag)
+			if (!hasLevelData)
 			{
-				if (num2 <= 0)
+				if (currentLevel <= 0)
 				{
 					MarkUnavailable(row);
 				}
 				else
 				{
-					MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] level " + num + " has no data for type " + type + " (currently Lv" + num2 + "), not blocking.");
+					MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] level " + targetLevel + " has no data for type " + type + " (currently Lv" + currentLevel + "), not blocking.");
 				}
-				RestoreProtection(abnormalList, num3, level);
+				RestoreProtection(abnormalList, oppositeType, removedOppositeLevel);
 				return;
 			}
 		}
 		try
 		{
-			if (num <= 0)
+			if (targetLevel <= 0)
 			{
-				if (num2 > 0)
+				if (currentLevel > 0)
 				{
 					abnormalList.RemoveAbnormal(row.Type);
 				}
 			}
 			else
 			{
-				abnormalList.AddAbnormal(row.Type, num);
+				abnormalList.AddAbnormal(row.Type, targetLevel);
 			}
 		}
-		catch (Exception ex2)
+		catch (Exception setError)
 		{
-			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] set abnormal failed: type " + type + ", current=" + num2 + ", want=" + num + ", msg=" + ex2.Message);
+			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] set abnormal failed: type " + type + ", current=" + currentLevel + ", want=" + targetLevel + ", msg=" + setError.Message);
 			try
 			{
-				if (num2 > 0)
+				if (currentLevel > 0)
 				{
-					abnormalList.AddAbnormal(row.Type, num2);
+					abnormalList.AddAbnormal(row.Type, currentLevel);
 				}
 				else
 				{
@@ -1437,10 +1507,10 @@ public class Main : MelonMod
 			catch
 			{
 			}
-			RestoreProtection(abnormalList, num3, level);
-			if (num2 > 0)
+			RestoreProtection(abnormalList, oppositeType, removedOppositeLevel);
+			if (currentLevel > 0)
 			{
-				MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] level change failed for type " + type + " (" + num2 + " -> " + num + "), left unchanged");
+				MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] level change failed for type " + type + " (" + currentLevel + " -> " + targetLevel + "), left unchanged");
 			}
 			else
 			{
@@ -1456,7 +1526,7 @@ public class Main : MelonMod
 				return;
 			}
 		}
-		if (num > 0)
+		if (targetLevel > 0)
 		{
 			_activeTypes.Add(type);
 		}
@@ -1474,32 +1544,35 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>点击切换：当前等级大于 0 就关掉，否则设为 1 级。</summary>
 	internal static void ToggleRow(StatusRow row)
 	{
 		if (row == null)
 		{
 			return;
 		}
+		// 数据尚未加载：先发起按需加载，本次点击不处理。
 		if (row.Data == null)
 		{
 			EnsureTypeLoaded(row.Type);
 			return;
 		}
-		int num = 0;
+		int currentLevel = 0;
 		try
 		{
 			AbnormalList abnormalList = GetAbnormalList();
 			if (abnormalList != null)
 			{
-				num = abnormalList.GetAbnormalLevel(row.Type);
+				currentLevel = abnormalList.GetAbnormalLevel(row.Type);
 			}
 		}
 		catch
 		{
 		}
-		ApplyLevel(row, (num <= 0) ? 1 : 0);
+		ApplyLevel(row, (currentLevel <= 0) ? 1 : 0);
 	}
 
+	/// <summary>按方向增减等级（dir 为 +1 或 -1），结果夹在 0 与最大等级之间。</summary>
 	internal static void AdjustRowLevel(StatusRow row, int dir)
 	{
 		if (row == null)
@@ -1511,11 +1584,11 @@ public class Main : MelonMod
 			EnsureTypeLoaded(row.Type);
 			return;
 		}
-		int max = 1;
-		int num = 0;
+		int maxLevel = 1;
+		int currentLevel = 0;
 		try
 		{
-			max = Mathf.Max(1, row.Data.MaxLevel);
+			maxLevel = Mathf.Max(1, row.Data.MaxLevel);
 		}
 		catch
 		{
@@ -1525,29 +1598,31 @@ public class Main : MelonMod
 			AbnormalList abnormalList = GetAbnormalList();
 			if (abnormalList != null)
 			{
-				num = abnormalList.GetAbnormalLevel(row.Type);
+				currentLevel = abnormalList.GetAbnormalLevel(row.Type);
 			}
 		}
 		catch
 		{
 		}
-		ApplyLevel(row, Mathf.Clamp(num + dir, 0, max));
+		ApplyLevel(row, Mathf.Clamp(currentLevel + dir, 0, maxLevel));
 	}
 
+	/// <summary>每帧最多发起一次按需加载：只处理可视区附近且尚未取得数据的行。</summary>
 	private static void StepLazyLoad()
 	{
 		if (Time.time < _lazyLoadCooldown || UI == null || Rows.Count == 0)
 		{
 			return;
 		}
-		float num = UI.RowH + UI.RowSpacing;
-		if (num <= 0.01f)
+		float rowStride = UI.RowH + UI.RowSpacing;
+		if (rowStride <= 0.01f)
 		{
 			return;
 		}
-		int num2 = Mathf.Max(0, Mathf.FloorToInt(UI.ScrollY / num) - 1);
-		int num3 = Mathf.Min(Rows.Count - 1, Mathf.CeilToInt((UI.ScrollY + UI.ViewHeight) / num) + 1);
-		for (int i = num2; i <= num3; i++)
+		// 只对可视区附近的行发起加载，避免一次性加载全部 70 个类型。
+		int firstVisible = Mathf.Max(0, Mathf.FloorToInt(UI.ScrollY / rowStride) - 1);
+		int lastVisible = Mathf.Min(Rows.Count - 1, Mathf.CeilToInt((UI.ScrollY + UI.ViewHeight) / rowStride) + 1);
+		for (int i = firstVisible; i <= lastVisible; i++)
 		{
 			StatusRow statusRow = Rows[i];
 			if (statusRow == null || statusRow.Data != null || statusRow.Blocked)
@@ -1561,17 +1636,19 @@ public class Main : MelonMod
 			}
 			if (_loadRequested.Contains(type))
 			{
-				if (_loadRequestTime.TryGetValue(type, out var value) && !(Time.time - value > 8f))
+				// 超过 8 秒仍未加载完成，视为请求丢失，允许重新请求。
+				if (_loadRequestTime.TryGetValue(type, out var requestTime) && !(Time.time - requestTime > 8f))
 				{
 					continue;
 				}
 				_loadRequested.Remove(type);
 				_loadRequestTime.Remove(type);
 			}
-			_loadAttempts.TryGetValue(type, out var value2);
-			if (value2 < 3)
+			_loadAttempts.TryGetValue(type, out var attempts);
+			// 每种类型最多自动尝试 3 次。
+			if (attempts < 3)
 			{
-				_loadAttempts[type] = value2 + 1;
+				_loadAttempts[type] = attempts + 1;
 				if (!EnsureTypeLoaded(statusRow.Type))
 				{
 					_lazyLoadCooldown = Time.time + 1f;
@@ -1580,6 +1657,7 @@ public class Main : MelonMod
 				{
 					_lazyLoadCooldown = Time.time + 0.15f;
 				}
+				// 每帧最多发起一次加载请求，避免卡顿。
 				break;
 			}
 		}

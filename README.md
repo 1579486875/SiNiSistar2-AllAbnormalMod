@@ -269,6 +269,45 @@ MelonLoader\  （文件夹）
 
 > 内置离线依赖是为了让首次启动不用从 GitHub 下载东西。
 
+## 仓库结构（开发者向）
+
+本仓库既是发布包，也是工程源码所在：
+
+| 路径 | 用途 |
+| --- | --- |
+| `src/` | Mod 源码（C# / net6.0）与 `AllAbnormalMod.csproj` |
+| `ModData/` | 发布树：MelonLoader 运行时、Mod 本体、简体中文语言包 |
+| `install.bat`、`install.ps1` | 安装器 |
+| `更新公告.txt` | 最近一次更新的公告 |
+
+发布包 zip **只包含玩家需要的部分，不含 `src/`**。
+
+### 自己编译
+
+需要 .NET SDK，以及一份已经运行过游戏、生成好 `MelonLoader/Il2CppAssemblies/` 的游戏目录：
+
+```
+dotnet build src/AllAbnormalMod.csproj -c Release -p:GameDir="D:\Games\SiNiSistar 2"
+```
+
+省略 `-p:GameDir` 时会自动探测 Steam 默认安装位置。
+
+> **踩坑提示**：`GameDir` 含空格时，Windows PowerShell 5.1 不会自动转义原生命令参数，
+> 路径会在空格处被截断（且 `SiNiSistar` 与 `SiNiSistar 2` 往往同时存在，于是错误地
+> 编译过去、报出莫名其妙的类型错误）。稳妥写法是用数组传参：
+>
+> ```powershell
+> $a = @('build','src/AllAbnormalMod.csproj','-c','Release',"-p:GameDir=$game")
+> dotnet @a
+> ```
+
+> **另一个坑**：`AllAbnormalMod.csproj` 必须留在 `src/` 里，不要挪到仓库根。
+> MSBuild 默认的 `AssemblySearchPaths` 会按文件名去**项目目录及其子目录**找同名程序集，
+> 而 `ModData/MelonLoader/Dependencies/Il2CppAssemblyGenerator/UnityDependencies/` 下
+> 放着 Cpp2IL 用的**原生版** `UnityEngine*.dll` —— 一旦它们被搜到，就会盖掉
+> HintPath 指定的 Il2Cpp 版，症状是编译报 `CS0029`（`Resources.FindObjectsOfTypeAll<T>()`
+> 被解析成返回 `T[]`）。把工程放进 `src/` 后项目目录里没有发布树，问题自然消失。
+
 ## 技术说明
 
 - **MelonLoader 0.7.3 IL2CPP 注入**：`version.dll` 经 `UnityPlayer.dll` 的 VERSION 导入劫持

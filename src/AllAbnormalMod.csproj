@@ -8,7 +8,7 @@
     <OutputType>Library</OutputType>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <Version>1.0.16</Version>
+    <Version>1.0.17</Version>
     <Deterministic>true</Deterministic>
 
     <!--

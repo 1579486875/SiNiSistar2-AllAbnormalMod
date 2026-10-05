@@ -1,14 +1,282 @@
 ﻿# SiNiSistar 2「全异常状态设定」Mod - 自动检测安装脚本
-# 自动查找游戏目录（Steam 库 / 非 Steam 版 / 常见盘符），确认后安装。
+# 自动查找游戏目录（Steam 库 / 卸载登记 / 全盘递归 / 常见游戏位置），确认后安装。
 # 已经装过旧版的话会自动更新：只覆盖有变化的文件，其余原样跳过。
 # 也可以直接指定目录：install.ps1 -GameDir "D:\Games\SiNiSistar 2"
+# 手动填的路径会做容错：去引号、去尾空格、填到 exe、填到外层目录、填到 Data 目录都能自动纠正。
 # 兼容 Windows PowerShell 5.1，文件编码 UTF-8 BOM。
 
 param(
-    [string]$GameDir = ""
+    [string]$GameDir = "",
+    [int]$SearchSeconds = 30,
+    [switch]$DryRun
 )
 
 $ErrorActionPreference = "Stop"
+
+# 递归搜索时跳过的目录名（小写比较）——避免钻进系统目录浪费时间
+$script:SkipNames = @(
+    'windows', 'winsxs', 'windowsapps', 'system volume information', '$recycle.bin',
+    'programdata', 'appdata', 'application data', 'local settings',
+    'node_modules', '.git', '.svn', '.vs', '.vscode', '.idea',
+    'obj', 'bin', 'packages', 'driverstore', 'assembly', 'microsoft.net',
+    'installer', 'softwaredistribution', 'temp', 'tmp', 'cache',
+    'windows defender', 'common files', 'windows nt', 'wow6432node',
+    'fonts', 'inf', 'logs', 'media', 'servicing', 'speech', 'twain_32'
+)
+
+# 常见游戏安装位置（相对盘根），优先扫这些能更快命中
+# 注意：不要把 'program files' 放进来 —— 对它做限深递归要遍历几万个目录，
+# 会把整个搜索时间预算吃光，而游戏极少直接装在它的根下。
+$script:HotNames = @('games', 'game', 'steamapps', 'games library', 'gamelibrary',
+                     'downloads', 'desktop', 'documents', 'pc games', 'pcgames')
+
+# ------------------------------------------------------------------ 基础工具
+
+# 路径归一：去引号 / 去尾空格 / 正斜杠转反斜杠
+function Normalize-Path([string]$p) {
+    if ([string]::IsNullOrWhiteSpace($p)) { return "" }
+    $p = $p.Trim()
+    $p = $p.Trim('"').Trim("'").Trim()
+    $p = $p -replace '/', '\'
+    $p = $p.TrimEnd('\')
+    return $p
+}
+
+<#
+ 判定一个目录是不是 SiNiSistar 2 的游戏目录。
+ 指纹取自 <游戏名>_Data/app.info（内容是两行：开发商 Uu、游戏名 SiNiSistar2），
+ 而不是「有 *_Data + GameAssembly.dll 就算」—— 后者会把绝区零之类
+ 所有 Unity 游戏都误判进来。用 app.info 既能排除别的 Unity 游戏，
+ 也能认出 exe / Data 目录被改过名的整合版。
+ 命中任一即可：
+   1) 存在 SiNiSistar2_Data 目录
+   2) 存在 SiNiSistar2.exe
+   3) 某个 *_Data 目录下的 app.info 里写着 SiNiSistar2
+#>
+function Test-GameDir([string]$dir) {
+    if ([string]::IsNullOrWhiteSpace($dir)) { return $false }
+    try {
+        if (-not (Test-Path -LiteralPath $dir -PathType Container)) { return $false }
+    } catch { return $false }
+
+    $items = $null
+    try {
+        $items = Get-ChildItem -LiteralPath $dir -Force -ErrorAction SilentlyContinue
+    } catch { return $false }
+    if (-not $items) { return $false }
+
+    $dataDirs = @()
+    foreach ($it in $items) {
+        if ($it.PSIsContainer) {
+            if ($it.Name -ieq 'SiNiSistar2_Data') { return $true }
+            if ($it.Name -like '*_Data') { $dataDirs += $it.FullName }
+        } elseif ($it.Name -ieq 'SiNiSistar2.exe') {
+            return $true
+        }
+    }
+
+    # 只有在确实看到 *_Data 目录时才去读 app.info（小文件，读一次很快）
+    foreach ($d in $dataDirs) {
+        $appInfo = Join-Path $d 'app.info'
+        if (-not (Test-Path -LiteralPath $appInfo)) { continue }
+        try {
+            $c = Get-Content -LiteralPath $appInfo -Raw -ErrorAction SilentlyContinue
+            if ($c -and ($c -match 'SiNiSistar2')) { return $true }
+        } catch { }
+    }
+    return $false
+}
+
+# 广度优先在 $root 下找游戏目录，最多 $maxDepth 层；返回第一个命中的目录
+function Find-GameUnder {
+    param(
+        [string]$root,
+        [int]$maxDepth = 4,
+        [int]$maxChildren = 200,
+        [datetime]$deadline = [datetime]::MaxValue
+    )
+    if ([string]::IsNullOrWhiteSpace($root)) { return $null }
+    try {
+        if (-not (Test-Path -LiteralPath $root -PathType Container)) { return $null }
+    } catch { return $null }
+
+    $queue = New-Object System.Collections.Queue
+    $queue.Enqueue(@($root, 0))
+    $guard = 0
+
+    while ($queue.Count -gt 0) {
+        if ((Get-Date) -gt $deadline) { return $null }
+        $guard++
+        if ($guard -gt 20000) { return $null }
+
+        $item = $queue.Dequeue()
+        $dir = $item[0]
+        $depth = [int]$item[1]
+
+        if (Test-GameDir $dir) { return $dir }
+        if ($depth -ge $maxDepth) { continue }
+
+        $leaf = ""
+        try { $leaf = (Split-Path -Leaf $dir).ToLower() } catch { }
+        if ($script:SkipNames -contains $leaf) { continue }
+
+        $subs = $null
+        try {
+            $subs = Get-ChildItem -LiteralPath $dir -Directory -Force -ErrorAction SilentlyContinue |
+                    Select-Object -First $maxChildren
+        } catch { continue }
+        if (-not $subs) { continue }
+
+        foreach ($s in $subs) {
+            $queue.Enqueue(@($s.FullName, $depth + 1))
+        }
+    }
+    return $null
+}
+
+<#
+ 全盘找游戏目录。分两轮，先快后全：
+   第一轮：只沿着「名字像游戏」的目录深入（sinistar / シニシスタ / sini 等关键词），
+           以及常见游戏位置（Games、Downloads、steamapps…）——大多数机器这一步就命中了。
+   第二轮：仍有时间预算的话，再对盘根做一次限深递归兜底。
+ 全程受 $SearchSeconds 时间预算约束，超时就返回已找到的结果。
+#>
+function Find-GameDirs {
+    param([int]$seconds = 30)
+
+    $results = New-Object System.Collections.Generic.List[string]
+    $seen = New-Object System.Collections.Generic.HashSet[string]
+    $deadline = (Get-Date).AddSeconds($seconds)
+
+    $roots = @()
+    try {
+        foreach ($d in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+            if ($d.Root -and (Test-Path -LiteralPath $d.Root)) { $roots += $d.Root }
+        }
+    } catch { }
+
+    # 每个盘符：先在根目录的直接子目录里按名字筛
+    foreach ($r in $roots) {
+        if ((Get-Date) -gt $deadline) { break }
+        $subs = $null
+        try {
+            $subs = Get-ChildItem -LiteralPath $r -Directory -Force -ErrorAction SilentlyContinue
+        } catch { continue }
+        if (-not $subs) { continue }
+
+        foreach ($s in $subs) {
+            if ((Get-Date) -gt $deadline) { break }
+            $leaf = $s.Name
+            $lower = $leaf.ToLower()
+
+            # 候选 1：名字像这个游戏
+            $nameHit = ($lower -match 'sinistar' -or $lower -match 'sini' -or
+                        $lower -match 'シニシスタ' -or $lower -match 'sisis')
+            # 候选 2：常见的游戏/下载目录
+            $hotHit = ($script:HotNames -contains $lower)
+            # 候选 3：本身就是游戏目录
+            if (Test-GameDir $s.FullName) {
+                if ($seen.Add($s.FullName.ToLower())) { [void]$results.Add($s.FullName) }
+                continue
+            }
+            if (-not ($nameHit -or $hotHit)) { continue }
+            # 已经有结果了（比如注册表里找到了 Steam 版）：这轮只认名字像这个
+            # 游戏的目录，不再逐个翻 Games / Downloads 这类常见大目录，省好几秒。
+            if ($results.Count -gt 0 -and -not $nameHit) { continue }
+
+            # 单个目录最多找 4 秒：避免某个特别大的目录把预算全吃掉
+            $subDeadline = (Get-Date).AddSeconds(4)
+            if ($subDeadline -gt $deadline) { $subDeadline = $deadline }
+            $hit = Find-GameUnder -root $s.FullName -maxDepth 5 -deadline $subDeadline
+            if ($hit -and $seen.Add($hit.ToLower())) { [void]$results.Add($hit) }
+        }
+    }
+
+    # 用户目录再扫一轮：很多人把整合包解压在 Downloads / Desktop 里，
+    # 路径层级往往有 5~6 层，靠盘根浅扫够不到。
+    # 但如果前面已经找到过游戏（Steam 版 / 卸载登记 / 盘根），
+    # 这里就只快速看一眼常见解压位置 —— 不必为了多找一个副本让玩家干等半分钟。
+    if ((Get-Date) -lt $deadline) {
+        $alreadyFound = ($results.Count -gt 0)
+        $userRoots = @()
+        if (-not $alreadyFound) {
+            foreach ($v in @($env:USERPROFILE, $env:PUBLIC)) {
+                if ($v) { $userRoots += $v }
+            }
+        }
+        if ($env:USERPROFILE) {
+            foreach ($sub in @('Downloads', 'Desktop', 'Documents')) {
+                $userRoots += (Join-Path $env:USERPROFILE $sub)
+            }
+        }
+        if ($env:PUBLIC) { $userRoots += (Join-Path $env:PUBLIC 'Desktop') }
+        $userDepth = 6
+        if ($alreadyFound) { $userDepth = 4 }
+
+        foreach ($u in $userRoots) {
+            if ((Get-Date) -gt $deadline) { break }
+            if (-not (Test-Path -LiteralPath $u -PathType Container)) { continue }
+            if (Test-GameDir $u) {
+                if ($seen.Add($u.ToLower())) { [void]$results.Add($u) }
+                continue
+            }
+            # 单个目录最多找 5 秒
+            $uDeadline = (Get-Date).AddSeconds(5)
+            if ($uDeadline -gt $deadline) { $uDeadline = $deadline }
+            $hit = Find-GameUnder -root $u -maxDepth $userDepth -maxChildren 500 -deadline $uDeadline
+            if ($hit -and $seen.Add($hit.ToLower())) { [void]$results.Add($hit) }
+        }
+    }
+
+    # 兜底：前面一无所获时，才对每个盘做一次限深递归（这步最慢，能省则省）
+    if ($results.Count -eq 0 -and (Get-Date) -lt $deadline) {
+        foreach ($r in $roots) {
+            if ((Get-Date) -gt $deadline) { break }
+            $hit = Find-GameUnder -root $r -maxDepth 4 -maxChildren 300 -deadline $deadline
+            if ($hit -and $seen.Add($hit.ToLower())) { [void]$results.Add($hit) }
+        }
+    }
+
+    return $results
+}
+
+# 容错解析用户手填的路径
+function Resolve-GameDir([string]$raw) {
+    if ([string]::IsNullOrWhiteSpace($raw)) { return $null }
+    $p = Normalize-Path $raw
+    if ([string]::IsNullOrWhiteSpace($p)) { return $null }
+
+    # 直接填了 exe 文件 -> 取所在目录
+    if ($p -match '\.exe$') {
+        try { $p = Split-Path -Path $p -Parent } catch { return $null }
+    }
+    # 填了 Data 目录 -> 取父目录
+    if ($p -match '_Data$') {
+        try { $p = Split-Path -Path $p -Parent } catch { return $null }
+    }
+
+    if (-not (Test-Path -LiteralPath $p -PathType Container)) { return $null }
+
+    # 1) 本身就是游戏目录
+    if (Test-GameDir $p) {
+        try { return (Get-Item -LiteralPath $p).FullName } catch { return $p }
+    }
+
+    # 2) 填得太深（在游戏目录里面）-> 向上找 3 层
+    $up = $p
+    for ($i = 0; $i -lt 3; $i++) {
+        try { $up = Split-Path -Path $up -Parent } catch { break }
+        if ([string]::IsNullOrWhiteSpace($up)) { break }
+        if (Test-GameDir $up) {
+            try { return (Get-Item -LiteralPath $up).FullName } catch { return $up }
+        }
+    }
+
+    # 3) 填得太浅（在外面）-> 向下找 4 层
+    return Find-GameUnder -root $p -maxDepth 4
+}
+
+# ------------------------------------------------------------------ 其它探测来源
 
 function Find-SteamGameDir {
     $candidates = @()
@@ -24,15 +292,21 @@ function Find-SteamGameDir {
         $libRoots += Join-Path $steamPath "steamapps"
         $vdf = Join-Path $steamPath "steamapps\libraryfolders.vdf"
         if (Test-Path $vdf) {
-            $vdfContent = Get-Content $vdf -Raw
-            foreach ($m in [regex]::Matches($vdfContent, '"path"\s+"([^"]+)"')) {
-                $p = $m.Groups[1].Value -replace "\\\\", "\"
-                $libRoots += (Join-Path $p "steamapps")
-            }
+            try {
+                $vdfContent = Get-Content $vdf -Raw
+                foreach ($m in [regex]::Matches($vdfContent, '"path"\s+"([^"]+)"')) {
+                    $p = $m.Groups[1].Value -replace "\\\\", "\"
+                    $libRoots += (Join-Path $p "steamapps")
+                }
+            } catch { }
         }
         foreach ($lib in $libRoots) {
-            $g = Join-Path $lib "common\SiNiSistar 2"
-            if (Test-Path (Join-Path $g "SiNiSistar2.exe")) { $candidates += $g }
+            try {
+                if (-not (Test-Path -LiteralPath $lib)) { continue }
+                Get-ChildItem -LiteralPath (Join-Path $lib "common") -Directory -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Name -match 'SiNiSistar|シニシスタ' } |
+                    ForEach-Object { if (Test-GameDir $_.FullName) { $candidates += $_.FullName } }
+            } catch { }
         }
     }
     return $candidates
@@ -47,23 +321,14 @@ function Find-UninstallEntries {
     )
     foreach ($r in $roots) {
         try {
-            $items = Get-ItemProperty $r -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "SiNiSistar" }
+            $items = Get-ItemProperty $r -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -match "SiNiSistar|シニシスタ" }
             foreach ($it in $items) {
-                $loc = $it.InstallLocation
-                if ($loc -and (Test-Path (Join-Path $loc "SiNiSistar2.exe"))) { $candidates += $loc }
+                $loc = Normalize-Path $it.InstallLocation
+                if ($loc) {
+                    $ok = Resolve-GameDir $loc
+                    if ($ok) { $candidates += $ok }
+                }
             }
-        } catch { }
-    }
-    return $candidates
-}
-
-function Find-CommonDrives {
-    $candidates = @()
-    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
-        try {
-            Get-ChildItem -Path $drive.Root -Directory -ErrorAction SilentlyContinue | Where-Object {
-                $_.Name -match "SiNiSistar" -and (Test-Path (Join-Path $_.FullName "SiNiSistar2.exe"))
-            } | ForEach-Object { $candidates += $_.FullName }
         } catch { }
     }
     return $candidates
@@ -73,15 +338,18 @@ function Get-AllCandidates {
     $all = @()
     $all += Find-SteamGameDir
     $all += Find-UninstallEntries
-    $all += Find-CommonDrives
+    $all += Find-GameDirs -seconds $SearchSeconds
     $seen = @{}
     $result = @()
     foreach ($c in $all) {
+        if ([string]::IsNullOrWhiteSpace($c)) { continue }
         $key = $c.ToLower()
         if (-not $seen.ContainsKey($key)) { $seen[$key] = $true; $result += $c }
     }
     return $result
 }
+
+# ------------------------------------------------------------------ 安装
 
 function Get-GameVersion($dir) {
     $bf = Join-Path $dir "build_info.txt"
@@ -151,7 +419,7 @@ function Install-Into($gameDir) {
         Write-Host "  游戏版本: $ver" -ForegroundColor Cyan
         $vnum = $ver -replace "[^0-9.]", ""
         if ([string]::IsNullOrEmpty($vnum)) { $vnum = "1.0" }
-        try { if ([version]$vnum -lt [version]"1.3.0") { Write-Host "  [注意] 旧版本，如游戏异常请升级到 1.3.1" -ForegroundColor Yellow } } catch { }
+        try { if ([version]$vnum -lt [version]"1.2.0") { Write-Host "  [注意] 游戏版本较旧，如异常请升级到 1.3.1" -ForegroundColor Yellow } } catch { }
     }
     if (-not $isUpdate) {
         Write-Host "  Mod 状态: 没装过，将全新安装 v$newVer" -ForegroundColor Green
@@ -206,43 +474,90 @@ function Install-Into($gameDir) {
     Write-Host ""
 }
 
+# ------------------------------------------------------------------ 主流程
+
 Write-Host ""
 Write-Host "=== SiNiSistar 2「全异常状态设定」Mod 安装器 ===" -ForegroundColor Cyan
 
 # 允许直接指定游戏目录（高级用法，也方便自动化测试）
 if ($GameDir) {
-    if (Test-Path (Join-Path $GameDir "SiNiSistar2.exe")) {
-        Install-Into $GameDir
+    $resolved = Resolve-GameDir $GameDir
+    if ($resolved) {
+        if ($DryRun) { Write-Host "解析结果: $resolved" -ForegroundColor Green }
+        else { Install-Into $resolved }
     } else {
-        Write-Host "指定的目录里没有 SiNiSistar2.exe：$GameDir" -ForegroundColor Red
+        Write-Host "在指定的目录里没找到游戏：$GameDir" -ForegroundColor Red
+        Write-Host "请填「包含 SiNiSistar2.exe 的那个文件夹」。" -ForegroundColor Yellow
     }
     return
 }
 
+Write-Host "正在自动查找游戏目录（最多 $SearchSeconds 秒）..." -ForegroundColor DarkGray
 $candidates = @(Get-AllCandidates)
 
-if ($candidates.Count -eq 0) {
-    Write-Host "未自动找到游戏目录。请手动输入游戏路径（例如 D:\Games\SiNiSistar 2）：" -ForegroundColor Yellow
-    $manual = Read-Host "游戏路径"
-    if ($manual -and (Test-Path (Join-Path $manual "SiNiSistar2.exe"))) {
-        Install-Into $manual
-    } else {
-        Write-Host "路径无效或不存在，安装取消。" -ForegroundColor Red
+function Select-And-Install($list) {
+    if ($list.Count -eq 1) {
+        Write-Host ""
+        Write-Host "已自动找到游戏目录：" -ForegroundColor Green
+        Install-Into $list[0]
+        return $true
     }
-} elseif ($candidates.Count -eq 1) {
-    Write-Host "已自动找到游戏目录：" -ForegroundColor Green
-    Install-Into $candidates[0]
-} else {
+    Write-Host ""
     Write-Host "找到多个游戏目录，请选择要安装的目录：" -ForegroundColor Green
-    for ($i = 0; $i -lt $candidates.Count; $i++) {
-        $ver = Get-GameVersion $candidates[$i]
-        Write-Host "  [$($i+1)] $($candidates[$i])  (版本: $ver)"
+    for ($i = 0; $i -lt $list.Count; $i++) {
+        $ver = Get-GameVersion $list[$i]
+        Write-Host "  [$($i+1)] $($list[$i])  (版本: $ver)"
     }
-    $sel = Read-Host "输入编号 (1-$($candidates.Count))"
+    $sel = Read-Host "输入编号 (1-$($list.Count))，直接回车取消"
     $idx = 0
-    if (-not [int]::TryParse($sel, [ref]$idx) -or $idx -lt 1 -or $idx -gt $candidates.Count) {
-        Write-Host "无效输入，安装取消。" -ForegroundColor Red
-    } else {
-        Install-Into $candidates[$idx-1]
+    if ([int]::TryParse($sel, [ref]$idx) -and $idx -ge 1 -and $idx -le $list.Count) {
+        Install-Into $list[$idx-1]
+        return $true
+    }
+    return $false
+}
+
+$done = $false
+
+if ($candidates.Count -gt 0) {
+    $done = Select-And-Install $candidates
+}
+
+# 没找到、或者选择时取消了 -> 让玩家手填，填错可以重填
+if (-not $done) {
+    Write-Host ""
+    if ($candidates.Count -eq 0) {
+        Write-Host "没能自动找到游戏目录。麻烦手动填一下。" -ForegroundColor Yellow
+    }
+    Write-Host ""
+    Write-Host "怎么填（任选一种都行）：" -ForegroundColor Cyan
+    Write-Host "  1. 打开游戏文件夹，找到 SiNiSistar2.exe"
+    Write-Host "     右键它 -> 打开文件所在的位置 -> 点地址栏复制路径"
+    Write-Host "  2. 或者直接把「有 SiNiSistar2.exe 的那个文件夹」拖进这个窗口"
+    Write-Host "     （拖进来如果带引号也没关系，会自动去掉）"
+    Write-Host "  3. 填上一级文件夹也可以，会自动往下找。"
+    Write-Host ""
+    Write-Host "  注意：不要填 exe 文件本身以外的无关目录；填 SiNiSistar2.exe 也能认。" -ForegroundColor DarkGray
+    Write-Host ""
+
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        $manual = Read-Host "请粘贴或拖入游戏目录（直接回车退出）"
+        if ([string]::IsNullOrWhiteSpace($manual)) {
+            Write-Host "已取消安装。" -ForegroundColor Yellow
+            break
+        }
+        $resolved = Resolve-GameDir $manual
+        if ($resolved) {
+            Install-Into $resolved
+            $done = $true
+            break
+        }
+        Write-Host "这个路径里没找到游戏。再试一次吧（还能试 $(5 - $attempt) 次）：" -ForegroundColor Red
+        Write-Host "  你填的是：$manual" -ForegroundColor DarkGray
+    }
+
+    if (-not $done) {
+        Write-Host ""
+        Write-Host "安装取消。可以加群或留言告诉我你的游戏装在哪，我来适配。" -ForegroundColor Yellow
     }
 }

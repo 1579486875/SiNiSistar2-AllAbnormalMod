@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <LangVersion>10.0</LangVersion>
+    <Nullable>disable</Nullable>
+    <AssemblyName>AllAbnormalMod</AssemblyName>
+    <RootNamespace>AllAbnormalMod</RootNamespace>
+    <OutputType>Library</OutputType>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <Version>1.0.16</Version>
+    <Deterministic>true</Deterministic>
+
+    <!--
+      游戏目录：默认自动探测（Steam 版优先），也可以在命令行覆盖，例如
+        dotnet build -c Release -p:GameDir="D:\Games\SiNiSistar 2"
+      MelonLoader 的引用 DLL（net6）与 Il2CppAssemblies 都从该目录读取。
+    -->
+    <GameDir Condition="'$(GameDir)' == '' AND Exists('E:\SteamLibrary\steamapps\common\SiNiSistar 2\GameAssembly.dll')">E:\SteamLibrary\steamapps\common\SiNiSistar 2</GameDir>
+    <GameDir Condition="'$(GameDir)' == '' AND Exists('E:\TAML\SiNiSistar 2\GameAssembly.dll')">E:\TAML\SiNiSistar 2</GameDir>
+    <GameDir Condition="'$(GameDir)' == ''">E:\SteamLibrary\steamapps\common\SiNiSistar 2</GameDir>
+    <MelonDir>$(GameDir)\MelonLoader</MelonDir>
+
+  </PropertyGroup>
+
+  <!-- 路径检查：给出明确提示，而不是一堆“找不到类型”的报错 -->
+  <Target Name="CheckGameDir" BeforeTargets="ResolveReferences">
+    <Error Condition="!Exists('$(GameDir)\GameAssembly.dll')"
+           Text="找不到游戏目录：$(GameDir)（请用 -p:GameDir=... 指定正确的 SiNiSistar 2 目录）" />
+    <Error Condition="!Exists('$(MelonDir)\net6\MelonLoader.dll')"
+           Text="找不到 $(MelonDir)\net6\MelonLoader.dll —— 请先运行一次游戏，让 MelonLoader 完成自身部署。" />
+    <Error Condition="!Exists('$(MelonDir)\Il2CppAssemblies\Il2CppSiNiSistar2.dll')"
+           Text="找不到 $(MelonDir)\Il2CppAssemblies\Il2CppSiNiSistar2.dll —— 请先运行一次游戏，等 MelonLoader 生成 Il2Cpp 程序集。" />
+  </Target>
+
+  <ItemGroup>
+    <!-- MelonLoader 运行时（net6） -->
+    <Reference Include="MelonLoader" HintPath="$(MelonDir)\net6\MelonLoader.dll" Private="false" />
+    <Reference Include="Il2CppInterop.Runtime" HintPath="$(MelonDir)\net6\Il2CppInterop.Runtime.dll" Private="false" />
+
+    <!-- 游戏程序集（MelonLoader 运行时生成的版本，名称带 Il2Cpp 前缀） -->
+    <Reference Include="Il2CppSiNiSistar2" HintPath="$(MelonDir)\Il2CppAssemblies\Il2CppSiNiSistar2.dll" Private="false" />
+    <Reference Include="Il2CppUniTask" HintPath="$(MelonDir)\Il2CppAssemblies\Il2CppUniTask.dll" Private="false" />
+    <Reference Include="Il2CppUniRx" HintPath="$(MelonDir)\Il2CppAssemblies\Il2CppUniRx.dll" Private="false" />
+    <!-- CancellationToken 等 Il2Cpp 侧基础类型需要 Il2CppSystem（及其依赖 Il2Cppmscorlib） -->
+    <Reference Include="Il2Cppmscorlib" HintPath="$(MelonDir)\Il2CppAssemblies\Il2Cppmscorlib.dll" Private="false" />
+    <Reference Include="Il2CppSystem" HintPath="$(MelonDir)\Il2CppAssemblies\Il2CppSystem.dll" Private="false" />
+
+    <!-- Unity 模块 -->
+    <Reference Include="UnityEngine" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.CoreModule.dll" Private="false" />
+    <Reference Include="UnityEngine.UIModule" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.UIModule.dll" Private="false" />
+    <Reference Include="UnityEngine.TextRenderingModule" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.TextRenderingModule.dll" Private="false" />
+    <Reference Include="UnityEngine.InputLegacyModule" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.InputLegacyModule.dll" Private="false" />
+    <Reference Include="Unity.InputSystem" HintPath="$(MelonDir)\Il2CppAssemblies\Unity.InputSystem.dll" Private="false" />
+    <Reference Include="UnityEngine.UI" HintPath="$(MelonDir)\Il2CppAssemblies\UnityEngine.UI.dll" Private="false" />
+  </ItemGroup>
+
+
+</Project>

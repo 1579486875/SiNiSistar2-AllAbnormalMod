@@ -8,3 +8,7 @@ desktop.ini
 # 只忽略仓库根下的安装目标；不带前导斜杠会连带忽略 ModData/Mods/ 里的发布 DLL
 /Mods/
 /MelonLoader/Logs/
+
+# 编译产物
+bin/
+obj/

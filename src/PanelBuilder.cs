@@ -38,6 +38,9 @@ public static class PanelBuilder
 
 	internal static readonly Color HintWarnColor = new Color(1f, 0.58f, 0.45f, 1f);
 
+	/// <summary>比 HintWarnColor 更重的红色：用在「第二次点击、即将真正生效」这种更危险的提示上。</summary>
+	internal static readonly Color HintErrorColor = new Color(1f, 0.28f, 0.26f, 1f);
+
 	public static string LastError = "";
 
 	private static Canvas _canvas;

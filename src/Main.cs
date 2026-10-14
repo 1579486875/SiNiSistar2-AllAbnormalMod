@@ -29,34 +29,36 @@ public class Main : MelonMod
 
 	internal static GameObjectsRef UI;
 
-	private static readonly int[] DangerousTypes = new int[3] { 1650800693, 1630627383, 912668513 };
-
 	private const int ProtectionBarren = 825765986;
 
 	private const int ProtectionLoss = 912668723;
 
 	internal static readonly HashSet<int> UnavailableTypes = new HashSet<int>();
 
-	// ───────────────────────── 存档危险状态警告 ─────────────────────────
-	// 为什么要有这个：读档时游戏会走 AbnormalList.AbnormalSetup -> AddAbnormal，
-	// 而存档里只存了「类型 + 等级」，没有伤害栈；带 SlipDamage 系扩展的状态
-	// 会在这条路上空引用崩溃，把整个读档流程打断（现象=黑屏、按键全失灵、存档作废）。
+	// ───────────────────── 危险状态：警告 + 二次确认 ─────────────────────
+	// 这些状态不是不能用，而是「开之前得想清楚」。所以统一做成：
+	//   状态条上把名字染黄 → 点第一次只弹警告、不生效 → 名字染红 → 再点一次才真正挂上。
+	// 关闭不受影响，照常直接关。
+	//
+	// 危险的出处分两类：
+	//   ① 写进存档会让读档崩溃 —— v1.0.18 在真机上把 70 个状态全扫了一遍，
+	//      带 SlipDamage / AutoDead / GameEnd 扩展的只有下面这 4 个。
+	//      （早先按名字猜的那份 10 条名单实测 8 条误报、2 条漏报，已弃用。）
+	//      读档时游戏会走 AbnormalSetup -> AddAbnormal(data, level, damageStack)，
+	//      而存档里只存了「类型 + 等级」、没有伤害栈，这类状态会在这条路上空引用崩溃，
+	//      异常打断整条异步链 —— 现象就是黑屏且按键全部失灵。
+	//   ② 游戏 API 设置它会把玩家输入卡死，只能重启游戏 —— 早期实测。
 
-	/// <summary>
-	/// 兜底名单：只在运行时判定失败（取不到原生类名）时才用它。
-	///
-	/// 这 4 条是 v1.0.18 在真机上跑出来的实测结果 —— 70 个状态判定 67 个
-	/// （另外 3 个是被屏蔽的束缚类），其中只有这 4 个带危险扩展组件。
-	/// 早先按名字推断的那份 10 条名单已被证伪：石化 / 水蛭的卵 / 母体 / 污秽 /
-	/// 混浊 / 外之一 / 胃袋 实测全部安全，而真正的元凶「昏睡」「触手卵」当时被漏掉了。
-	/// 所以这份名单必须跟着实测走，不能靠猜。
-	/// </summary>
-	private static readonly System.Collections.Generic.Dictionary<int, string> FallbackSaveRisks = new System.Collections.Generic.Dictionary<int, string>
+	/// <summary>危险状态名单：typeId -> 给玩家看的危险原因。</summary>
+	private static readonly System.Collections.Generic.Dictionary<int, string> RiskyStatuses = new System.Collections.Generic.Dictionary<int, string>
 	{
-		{ 895562034, "持续伤害类，写进存档后读档会崩溃" },
-		{ 858940217, "持续伤害类，写进存档后读档会崩溃" },
-		{ 926245473, "自动死亡判定类，写进存档后读档会卡住" },
-		{ 858927927, "游戏结束演出类，写进存档后读档会卡住" }
+		{ 895562034, "写进存档后读档会崩溃" },
+		{ 858940217, "写进存档后读档会崩溃" },
+		{ 926245473, "写进存档后读档会卡住" },
+		{ 858927927, "写进存档后读档会卡住" },
+		{ 1650800693, "设置后可能卡住输入，只能重启游戏" },
+		{ 1630627383, "设置后可能卡住输入，只能重启游戏" },
+		{ 912668513, "设置后可能卡住输入，只能重启游戏" }
 	};
 
 	/// <summary>运行时判定结果缓存：typeId -> 风险原因（存 null 表示「已判定为安全」）。</summary>
@@ -64,6 +66,9 @@ public class Main : MelonMod
 
 	/// <summary>本次游戏里已经提醒过的状态，避免同一个状态反复刷提示。</summary>
 	private static readonly System.Collections.Generic.HashSet<int> RiskWarned = new System.Collections.Generic.HashSet<int>();
+
+	/// <summary>正等着第二次确认的危险状态；0 表示当前没有。</summary>
+	private static int _pendingConfirmType;
 
 	/// <summary>「已挂状态里有高危项」这项检查的节流时间。</summary>
 	private static float _riskNoticeCooldown;
@@ -153,6 +158,12 @@ public class Main : MelonMod
 
 	private static readonly Color NameBlockedColor = new Color(0.72f, 0.72f, 0.76f, 0.75f);
 
+	/// <summary>危险状态的名字颜色（黄）：提醒玩家点它之前先存档。</summary>
+	private static readonly Color NameRiskColor = new Color(1f, 0.84f, 0.36f, 1f);
+
+	/// <summary>危险状态已经点过一次、正等第二次确认时的名字颜色（红）。</summary>
+	private static readonly Color NameArmedColor = new Color(1f, 0.42f, 0.34f, 1f);
+
 	private static readonly Color BgSelectedColor = new Color(0.55f, 0.45f, 0.25f, 0.97f);
 
 	private static readonly Color BgOnColor = new Color(0.16f, 0.24f, 0.18f, 0.95f);
@@ -166,6 +177,12 @@ public class Main : MelonMod
 	private const int CodeLoading = -1;
 
 	private const int CodeFailed = -3;
+
+	/// <summary>危险状态、还没开：状态栏显示 ! 而不是 OFF。</summary>
+	private const int CodeRisky = -4;
+
+	/// <summary>危险状态、已经点过一次等确认：状态栏显示 !! 并转红。</summary>
+	private const int CodeRiskyArmed = -5;
 
 	private static readonly HashSet<int> _rowErrLogged = new HashSet<int>();
 
@@ -220,9 +237,11 @@ public class Main : MelonMod
 		try
 		{
 			LoadBlockedList();
-			for (int i = 0; i < DangerousTypes.Length; i++)
+			// 危险状态改走「警告 + 二次确认」，不再当作不可用状态屏蔽。
+			// 这里主动把它们从列表里剔除：旧版本的自己可能已经把它们写进 blocked.txt 了。
+			foreach (int riskyType in RiskyStatuses.Keys)
 			{
-				UnavailableTypes.Add(DangerousTypes[i]);
+				UnavailableTypes.Remove(riskyType);
 			}
 			PanelInput.InitIl2Cpp();
 			base.LoggerInstance.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] Initialized. [Signature] 大赢经直插白皮赢道&汐蓝 [DYJ-CBWP-YD-XL]");
@@ -303,15 +322,23 @@ public class Main : MelonMod
 	/// <summary>把某一行标记为不可用；首次发现该类型时写入屏蔽文件并打印警告。</summary>
 	private static void MarkUnavailable(StatusRow row)
 	{
-		if (row != null)
+		if (row == null)
 		{
-			row.Blocked = true;
-			int type = (int)row.Type;
-			if (UnavailableTypes.Add(type))
-			{
-				SaveBlocked(type);
-				MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] Status type " + type + " cannot be set through the game API; blocked (shown as x). Edit Mods/AllAbnormalMod_blocked.txt to unblock.");
-			}
+			return;
+		}
+		int type = (int)row.Type;
+		// 危险状态不做永久屏蔽：它们的定位是「能开，但得先看警告、再点第二下确认」。
+		// 写进 blocked.txt 等于剥夺玩家再试一次的机会，而且下次启动还会读回来。
+		if (RiskyStatuses.ContainsKey(type))
+		{
+			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] risky status " + type + " could not be set this time; kept clickable (not blocked).");
+			return;
+		}
+		row.Blocked = true;
+		if (UnavailableTypes.Add(type))
+		{
+			SaveBlocked(type);
+			MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] Status type " + type + " cannot be set through the game API; blocked (shown as x). Edit Mods/AllAbnormalMod_blocked.txt to unblock.");
 		}
 	}
 
@@ -892,6 +919,9 @@ public class Main : MelonMod
 		{
 			// 一旦被判定为不可用就永久屏蔽（游戏 API 无法设置该状态）。
 			bool isBlocked = (statusRow.Blocked = statusRow.Blocked || UnavailableTypes.Contains((int)statusRow.Type));
+			// 危险状态：名字要染警示色，其中「已点过一次等确认」的那个还要再红一档。
+			bool isRisky = RiskyStatuses.ContainsKey((int)statusRow.Type);
+			bool isArmed = isRisky && _pendingConfirmType == (int)statusRow.Type;
 			if (statusRow.Data == null && !isBlocked && probeData)
 			{
 				statusRow.Data = TryGetData(statusRow.Type);
@@ -932,8 +962,26 @@ public class Main : MelonMod
 				}
 			}
 			int loadAttempts;
-			// 状态码约定：-3 加载失败 / -2 被屏蔽 / -1 加载中 / 大于等于 0 表示当前等级。
-			int stateCode = (isBlocked ? (-2) : ((!(statusRow.Data != null)) ? ((_loadAttempts.TryGetValue((int)statusRow.Type, out loadAttempts) && loadAttempts >= 3) ? (-3) : (-1)) : currentLevel));
+			// 状态码约定：-5 危险待确认 / -4 危险未开 / -3 加载失败 / -2 被屏蔽 /
+			//             -1 加载中 / 大于等于 0 表示当前等级。
+			int stateCode;
+			if (isBlocked)
+			{
+				stateCode = CodeBlocked;
+			}
+			else if (statusRow.Data == null)
+			{
+				stateCode = ((_loadAttempts.TryGetValue((int)statusRow.Type, out loadAttempts) && loadAttempts >= 3) ? CodeFailed : CodeLoading);
+			}
+			else if (isRisky && currentLevel <= 0)
+			{
+				// 危险状态还没开：状态栏直接显示警示符，比显示 OFF 有用得多。
+				stateCode = (isArmed ? CodeRiskyArmed : CodeRisky);
+			}
+			else
+			{
+				stateCode = currentLevel;
+			}
 			if (statusRow.StateText != null && statusRow.LastStateCode != stateCode)
 			{
 				statusRow.LastStateCode = stateCode;
@@ -948,11 +996,21 @@ public class Main : MelonMod
 				{
 					switch (stateCode)
 					{
-					case -3:
+					case CodeFailed:
 						stateLabel = "✗";
 						stateColor = StateUnavailableColor;
 						break;
-					case -1:
+					case CodeRisky:
+						// 危险状态、还没开：一个感叹号，配上黄色的名字就够醒目了。
+						stateLabel = "!";
+						stateColor = NameRiskColor;
+						break;
+					case CodeRiskyArmed:
+						// 已经点过一次：两个感叹号 + 红色，意思是「再点一次就真开了」。
+						stateLabel = "!!";
+						stateColor = NameArmedColor;
+						break;
+					case CodeLoading:
 						stateLabel = "…";
 						stateColor = StateLoadingColor;
 						break;
@@ -973,19 +1031,37 @@ public class Main : MelonMod
 				statusRow.StateText.text = stateLabel;
 				statusRow.StateText.color = stateColor;
 			}
-			// 等级、名称或屏蔽状态有变化时才写 UI，减少文本与颜色赋值开销。
-			if (currentLevel != statusRow.LastLv || statusRow.LastName == null || statusRow.LastNameBlocked != isBlocked)
+			// 等级、名称、屏蔽状态或危险状态有变化时才写 UI，减少文本与颜色赋值开销。
+			if (currentLevel != statusRow.LastLv || statusRow.LastName == null || statusRow.LastNameBlocked != isBlocked || statusRow.LastRisky != isRisky || statusRow.LastArmed != isArmed)
 			{
 				statusRow.LastLv = currentLevel;
 				if (statusRow.NameText != null)
 				{
 					string statusName = GetStatusName(statusRow, currentLevel);
-					if (statusRow.LastName != statusName || statusRow.LastNameBlocked != isBlocked)
+					if (statusRow.LastName != statusName || statusRow.LastNameBlocked != isBlocked || statusRow.LastRisky != isRisky || statusRow.LastArmed != isArmed)
 					{
 						statusRow.LastName = statusName;
 						statusRow.LastNameBlocked = isBlocked;
+						statusRow.LastRisky = isRisky;
+						statusRow.LastArmed = isArmed;
 						statusRow.NameText.text = statusName;
-						statusRow.NameText.color = (isBlocked ? NameBlockedColor : NameNormalColor);
+						// 危险状态的名字染警示色：黄=有风险，红=已点过一次、再点就生效。
+						if (isBlocked)
+						{
+							statusRow.NameText.color = NameBlockedColor;
+						}
+						else if (isArmed)
+						{
+							statusRow.NameText.color = NameArmedColor;
+						}
+						else if (isRisky)
+						{
+							statusRow.NameText.color = NameRiskColor;
+						}
+						else
+						{
+							statusRow.NameText.color = NameNormalColor;
+						}
 					}
 				}
 			}
@@ -1466,11 +1542,30 @@ public class Main : MelonMod
 	/// <summary>查一个状态已知的风险（不触发新判定）。判定过就用判定结果，否则退回兜底名单。</summary>
 	private static string KnownSaveRisk(int typeId)
 	{
-		if (SaveRisks.TryGetValue(typeId, out string judged))
+		// 运行时判定优先 —— 它看的是游戏真正挂上去的扩展组件，最准。
+		if (SaveRisks.TryGetValue(typeId, out string judged) && judged != null)
 		{
 			return judged;
 		}
-		return FallbackSaveRisks.TryGetValue(typeId, out string fallback) ? fallback : null;
+		// 判定不到（例如没加载到数据），或判定为安全但属于「API 层面危险」的，退回静态名单。
+		return RiskyStatuses.TryGetValue(typeId, out string known) ? known : null;
+	}
+
+	/// <summary>危险状态第一次被点：只给黄色警告，什么都不做。</summary>
+	private static void WarnRiskyFirstClick(int typeId)
+	{
+		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		string reason = RiskyStatuses.TryGetValue(typeId, out string known) ? known : "有风险";
+		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] risky status first click: " + name + " (" + typeId + ") - " + reason + "; not applied, needs a second click.");
+		ShowHintWarning("⚠ " + name + "：" + reason + "。这个状态可能会导致坏档，建议测试之前先存档 —— 再点一次才会真正开启");
+	}
+
+	/// <summary>危险状态第二次被点：转成红色警告，然后放行。</summary>
+	private static void WarnRiskySecondClick(int typeId)
+	{
+		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] risky status confirmed by second click: " + name + " (" + typeId + "); applying now.");
+		ShowHintWarning("⚠ 已确认开启「" + name + "」：如果游戏卡住、黑屏或读档失败，请直接重启游戏", armed: true);
 	}
 
 	/// <summary>拼文本、把提示栏点亮成警告色，并写一条 Warning 日志。</summary>
@@ -1536,14 +1631,20 @@ public class Main : MelonMod
 	/// <summary>在面板提示栏显示 6 秒警告文本，到时间由 RestoreHint 还原。</summary>
 	private static void ShowHintWarning(string message)
 	{
+		ShowHintWarning(message, armed: false);
+	}
+
+	/// <summary>同上，但可以选更重的红色（armed=true）—— 用在「即将真正生效」那一步。</summary>
+	private static void ShowHintWarning(string message, bool armed)
+	{
 		// 6 秒后由 Tick 调用 RestoreHint 还原提示栏。
-		_hintWarnUntil = Time.time + 6f;
+		_hintWarnUntil = Time.time + HintWarnSeconds;
 		try
 		{
 			if (UI != null && UI.HintText != null)
 			{
 				UI.HintText.text = message;
-				UI.HintText.color = PanelBuilder.HintWarnColor;
+				UI.HintText.color = (armed ? PanelBuilder.HintErrorColor : PanelBuilder.HintWarnColor);
 			}
 		}
 		catch
@@ -1617,6 +1718,27 @@ public class Main : MelonMod
 		if (currentLevel == targetLevel)
 		{
 			return;
+		}
+		// 危险状态开之前必须点两次：第一次只弹警告、不生效；第二次转红后才真正挂上。
+		// 关闭（targetLevel <= 0）不受影响，照常直接关。
+		if (targetLevel > 0 && RiskyStatuses.ContainsKey(type))
+		{
+			if (_pendingConfirmType != type)
+			{
+				_pendingConfirmType = type;
+				WarnRiskyFirstClick(type);
+				RefreshRows();
+				return;
+			}
+			_pendingConfirmType = 0;
+			WarnRiskySecondClick(type);
+			// 这里不 return —— 继续往下把它真正挂上。
+		}
+		else if (_pendingConfirmType != 0)
+		{
+			// 玩家改点了别的状态：撤销上一次的待确认，免得过一会儿手滑点到就开了。
+			_pendingConfirmType = 0;
+			RefreshRows();
 		}
 		int oppositeType = OppositeProtection(type);
 		int removedOppositeLevel = 0;

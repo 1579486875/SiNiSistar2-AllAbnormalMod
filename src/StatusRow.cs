@@ -32,4 +32,10 @@ public class StatusRow
 	public bool LastSelected;
 
 	public bool Blocked;
+
+	/// <summary>上一次刷新时这一行是不是「危险状态」，用来决定名字要不要染成警示色。</summary>
+	public bool LastRisky;
+
+	/// <summary>上一次刷新时这一行是不是「已点过一次、等第二次确认」。</summary>
+	public bool LastArmed;
 }

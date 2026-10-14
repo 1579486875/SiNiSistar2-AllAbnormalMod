@@ -14,6 +14,20 @@ namespace AllAbnormalMod;
 /// </summary>
 public class PanelInput : MonoBehaviour
 {
+	// ───────────────────────── try/catch 约定 ─────────────────────────
+	// 本文件里很多 catch 是**空**的，这是有意的，不是偷懒：
+	// 模组活在游戏自己的主循环里，任何一处把异常抛出去都可能直接打断
+	// 游戏的初始化或渲染 —— 那比「某个功能失效」严重得多。
+	//
+	// 统一原则：
+	//   · 调用游戏侧接口（Il2Cpp 互操作）一律包 try：拿不到就当作没有，走降级分支；
+	//   · 访问可能为 null 的 Unity 对象前先判空，判空本身失败也吞掉；
+	//   · UI 写入失败只影响显示，绝不影响游戏逻辑。
+	//
+	// 因此**不要**往这些空 catch 里补日志：异常场景下它们可能每帧触发，
+	// 而写日志是同步磁盘 IO（MelonLogger 还会抓调用栈），会把卡顿放大成雪崩。
+	// 确实需要留痕的地方，都在 catch 外面单独判了状态、并且只打一次。
+
 	internal const string InputTag = "DYJ-CBWP-YD-XL";
 
 	private GameObjectsRef _ui;
@@ -42,12 +56,22 @@ public class PanelInput : MonoBehaviour
 
 	private string _lastError;
 
-	private float _repeatTimer;
+	/// <summary>长按 W/S 时用的连发计时器（累积到 RepeatInterval 就走一行）。</summary>
+	private float _repeatMoveTimer;
+
+	/// <summary>
+	/// 长按 A/D/± 时用的连发计时器，**必须与移动那个分开**。
+	///
+	/// 早先两者共用同一个 _repeatTimer，而移动那边的清零条件里含
+	/// `(!wHeld && !sHeld)` —— 玩家只按住 D、不碰 W/S 时这个条件恒为真，
+	/// 于是计时器每帧被清零、永远攒不到 RepeatInterval，
+	/// A/D/± 的长按连发实际上从来没生效过（只有按下那一帧会触发）。
+	/// </summary>
+	private float _repeatLevelTimer;
 
 	private const float RepeatInterval = 0.16f;
 
-	private const float DragTopArea = 124f;
-
+	/// <summary>面板四周可拖动的边缘宽度（像素）：抓住边框就能挪面板。</summary>
 	private const float DragBorder = 10f;
 
 	/// <summary>
@@ -189,24 +213,24 @@ public class PanelInput : MonoBehaviour
 		bool sHeld = keyboard.sKey.isPressed;
 		bool wPressed = keyboard.wKey.wasPressedThisFrame;
 		bool sPressed = keyboard.sKey.wasPressedThisFrame;
-		// 刚按下或两键都已松开时把连发计时清零，按住不放则持续累积，形成长按连发。
+		// 移动的连发计时：刚按下、或两键都已松开时清零；按住不放则持续累积。
 		if (wPressed || sPressed || (!wHeld && !sHeld))
 		{
-			_repeatTimer = 0f;
+			_repeatMoveTimer = 0f;
 		}
 		else
 		{
-			_repeatTimer += Time.deltaTime;
+			_repeatMoveTimer += Time.deltaTime;
 		}
-		// 累积到一个间隔（0.16f = RepeatInterval）就触发一次重复。
-		bool repeatReady = _repeatTimer >= 0.16f;
-		if (repeatReady)
+		// 累积到一个间隔就触发一次重复。
+		bool moveRepeatReady = _repeatMoveTimer >= RepeatInterval;
+		if (moveRepeatReady)
 		{
 			// 减去一个间隔而不是清零，保留溢出的时间，低帧率下长按连发速度才不会被拖慢。
-			_repeatTimer -= 0.16f;
+			_repeatMoveTimer -= RepeatInterval;
 		}
-		bool moveUp = wPressed || (wHeld && repeatReady);
-		bool moveDown = sPressed || (sHeld && repeatReady);
+		bool moveUp = wPressed || (wHeld && moveRepeatReady);
+		bool moveDown = sPressed || (sHeld && moveRepeatReady);
 		if (moveUp || moveDown)
 		{
 			if (!_hasSelection)
@@ -229,11 +253,28 @@ public class PanelInput : MonoBehaviour
 		// 提升等级：D / 主键盘 = / 小键盘 +。
 		bool levelUpPressed = keyboard.dKey.wasPressedThisFrame || keyboard.equalsKey.wasPressedThisFrame || keyboard.numpadPlusKey.wasPressedThisFrame;
 		bool levelUpHeld = keyboard.dKey.isPressed || keyboard.equalsKey.isPressed || keyboard.numpadPlusKey.isPressed;
-		if (levelDownPressed || (levelDownHeld && repeatReady))
+		// 调等级自己一套连发计时，只受 A/D/± 影响，不掺和上面 W/S 的清零条件。
+		// （两者共用一个计时器时，只按 D 会导致计时器被 W/S 的条件每帧清零 —— 见字段处注释。）
+		bool anyLevelHeld = levelDownHeld || levelUpHeld;
+		bool anyLevelPressed = levelDownPressed || levelUpPressed;
+		if (anyLevelPressed || !anyLevelHeld)
+		{
+			_repeatLevelTimer = 0f;
+		}
+		else
+		{
+			_repeatLevelTimer += Time.deltaTime;
+		}
+		bool levelRepeatReady = _repeatLevelTimer >= RepeatInterval;
+		if (levelRepeatReady)
+		{
+			_repeatLevelTimer -= RepeatInterval;
+		}
+		if (levelDownPressed || (levelDownHeld && levelRepeatReady))
 		{
 			AdjustLevel(-1);
 		}
-		if (levelUpPressed || (levelUpHeld && repeatReady))
+		if (levelUpPressed || (levelUpHeld && levelRepeatReady))
 		{
 			AdjustLevel(1);
 		}
@@ -482,13 +523,16 @@ public class PanelInput : MonoBehaviour
 			{
 				return false;
 			}
-			// 顶部 124 像素（标题栏区域）整条都可拖动。
-			if (localPoint.y >= panelRect.yMax - 124f)
+			// 顶部那条留白（标题栏区域）整条都可拖动。
+			// 高度读 _ui.TopInset —— 这是个可变值，不能写死：
+			// 面板矮时会切紧凑布局、留白从 124 缩到 72，写死的话
+			// 多出来的那 52px 会被当成标题栏，玩家点那里的状态行会变成拖面板。
+			if (localPoint.y >= panelRect.yMax - _ui.TopInset)
 			{
 				return true;
 			}
-			// 四周 10 像素的边缘同样可以拖动，方便抓住边框移动面板。
-			if (localPoint.x <= panelRect.xMin + 10f || localPoint.x >= panelRect.xMax - 10f || localPoint.y <= panelRect.yMin + 10f || localPoint.y >= panelRect.yMax - 10f)
+			// 四周边缘同样可以拖动，方便抓住边框移动面板。
+			if (localPoint.x <= panelRect.xMin + DragBorder || localPoint.x >= panelRect.xMax - DragBorder || localPoint.y <= panelRect.yMin + DragBorder || localPoint.y >= panelRect.yMax - DragBorder)
 			{
 				return true;
 			}

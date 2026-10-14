@@ -23,6 +23,20 @@ namespace AllAbnormalMod;
 /// <summary>AllAbnormalMod 主类：管理异常状态面板的生命周期、按需加载与状态等级读写。</summary>
 public class Main : MelonMod
 {
+	// ───────────────────────── try/catch 约定 ─────────────────────────
+	// 本文件里很多 catch 是**空**的，这是有意的，不是偷懒：
+	// 模组活在游戏自己的主循环里，任何一处把异常抛出去都可能直接打断
+	// 游戏的初始化或渲染 —— 那比「某个功能失效」严重得多。
+	//
+	// 统一原则：
+	//   · 调用游戏侧接口（Il2Cpp 互操作）一律包 try：拿不到就当作没有，走降级分支；
+	//   · 访问可能为 null 的 Unity 对象前先判空，判空本身失败也吞掉；
+	//   · UI 写入失败只影响显示，绝不影响游戏逻辑。
+	//
+	// 因此**不要**往这些空 catch 里补日志：异常场景下它们可能每帧触发，
+	// 而写日志是同步磁盘 IO（MelonLogger 还会抓调用栈），会把卡顿放大成雪崩。
+	// 确实需要留痕的地方，都在 catch 外面单独判了状态、并且只打一次。
+
 	private static string _modVersion;
 
 	internal static readonly System.Collections.Generic.List<StatusRow> Rows = new System.Collections.Generic.List<StatusRow>();
@@ -83,6 +97,16 @@ public class Main : MelonMod
 
 	private static float _lastRefresh;
 
+	/// <summary>
+	/// 全部 70 个异常状态的类型 ID，顺序与游戏的 AbnormalType 枚举声明顺序一致。
+	///
+	/// 这张表是全模组的数据源头：RebuildActiveSet 靠它逐个数一遍「现在挂了哪些状态」，
+	/// 面板的 70 行也照它来建。取值方式是用反编译工具读游戏程序集里的
+	/// AbnormalType 枚举，再逐个配中文名（见 TypeNames.Table）。
+	///
+	/// ⚠ 游戏以后新增异常状态时，这里**不会**报错，只会静默少一两个 ——
+	/// 升级游戏后需要重新对一遍枚举，把新 ID 补进来，同时把下面的 [70] 改掉。
+	/// </summary>
 	internal static readonly int[] AllTypeValues = new int[70]
 	{
 		825648481, 1681275188, 1684355129, 912668723, 926496313, 1630627383, 1647458103, 926037814, 1701143864, 1717855074,
@@ -308,9 +332,9 @@ public class Main : MelonMod
 				if (!File.Exists(blockedFilePath))
 				{
 					File.AppendAllText(blockedFilePath, "# AllAbnormalMod by 大赢经直插白皮赢道&汐蓝 [DYJ-CBWP-YD-XL]" + Environment.NewLine);
-					File.AppendAllText(blockedFilePath, "# One blocked status type per line. Delete a line to allow it again." + Environment.NewLine);
+					File.AppendAllText(blockedFilePath, "# 每行一个被屏蔽的状态类型 ID；删掉对应行即可重新启用。" + Environment.NewLine);
 				}
-				File.AppendAllText(blockedFilePath, type + "   # blocked automatically (cannot be set via game API) [DYJ-CBWP-YD-XL]" + Environment.NewLine);
+				File.AppendAllText(blockedFilePath, type + "   # 已自动屏蔽（游戏接口无法设置该状态）[DYJ-CBWP-YD-XL]" + Environment.NewLine);
 			}
 		}
 		// 写屏蔽文件失败（磁盘只读等）不应打断游戏流程。
@@ -423,6 +447,9 @@ public class Main : MelonMod
 		_lazyLoadCooldown = 0f;
 		_activeTypes.Clear();
 		_activeSetDirty = true;
+		// 换了场景就把「等待二次确认」也撤掉：跨场景还留着的话，
+		// 玩家回来随手一点就直接开启了，等于二次确认被绕过。
+		_pendingConfirmType = 0;
 		for (int i = 0; i < Rows.Count; i++)
 		{
 			StatusRow statusRow = Rows[i];
@@ -751,6 +778,9 @@ public class Main : MelonMod
 			RebuildActiveSet();
 			RefreshActiveCount(force: true);
 			_loadAttempts.Clear();
+			// 面板刚打开：上一次留下的「待二次确认」作废。
+			// 否则关掉面板隔一阵再打开，那个状态名字还是红的，点一下就直接开了。
+			_pendingConfirmType = 0;
 		}
 		try
 		{
@@ -879,7 +909,14 @@ public class Main : MelonMod
 		}
 	}
 
-	/// <summary>设置当前选中的行；只刷新新旧两个下标的行。</summary>
+	/// <summary>
+	/// 设置当前选中的行。
+	///
+	/// 选中高亮是画在行背景色上的，而背景由 RefreshRows 按可视区批量写，
+	/// 所以这里直接刷一遍可视区（而不是只刷变化的两行）；
+	/// 再单独补刷「刚刚失去选中」的那一行 —— 它可能已经滚出可视区，
+	/// 不在上面那轮的范围内，不补的话会留在高亮状态。
+	/// </summary>
 	internal static void SetSelected(int index)
 	{
 		int previousIndex = _selectedIndex;
@@ -971,7 +1008,7 @@ public class Main : MelonMod
 			}
 			else if (statusRow.Data == null)
 			{
-				stateCode = ((_loadAttempts.TryGetValue((int)statusRow.Type, out loadAttempts) && loadAttempts >= 3) ? CodeFailed : CodeLoading);
+				stateCode = ((_loadAttempts.TryGetValue((int)statusRow.Type, out loadAttempts) && loadAttempts >= MaxAutoLoadAttempts) ? CodeFailed : CodeLoading);
 			}
 			else if (isRisky && currentLevel <= 0)
 			{
@@ -1233,7 +1270,7 @@ public class Main : MelonMod
 		try
 		{
 			// 等级上限封顶 20，与 LvText 表的长度保持一致。
-			maxLevel = Mathf.Clamp(row.Data.MaxLevel, 1, 20);
+			maxLevel = Mathf.Clamp(row.Data.MaxLevel, 1, MaxNameScanLevel);
 		}
 		catch
 		{
@@ -1371,8 +1408,12 @@ public class Main : MelonMod
 		_lastActiveCount = count;
 		try
 		{
+			// 注意：这里**不要**再顺手加日志。MelonLogger.Msg 走的是
+			// NativeMsg(..., null, txt)，会触发 GetMelonFromStackTrace()
+			// 里的 new StackTrace(3, true)（要解析文件名与行号），再加 native 写盘。
+			// 而本方法会被 IsLastActiveStatus(force: true) 调用 —— 每关一个状态就打一行。
+			// 面板上已经有「已挂:N」了，这里不需要额外留痕。
 			UI.ActiveCountText.text = "已挂:" + count;
-			MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] active abnormal count = " + count);
 		}
 		catch
 		{
@@ -1405,8 +1446,8 @@ public class Main : MelonMod
 	{
 		return typeId switch
 		{
-			825765986 => 912668723, 
-			912668723 => 825765986, 
+			ProtectionBarren => ProtectionLoss,
+			ProtectionLoss => ProtectionBarren,
 			_ => 0, 
 		};
 	}
@@ -1519,8 +1560,11 @@ public class Main : MelonMod
 
 	/// <summary>
 	/// 判定并记下一个状态的风险，结果缓存起来（每种状态只判定一次）。
-	/// 顺便把「状态名 + ID + 安全/风险」写进 MelonLoader 日志：
-	/// 出问题时直接翻日志就能看到全表，不用再猜。
+	///
+	/// 只有**判定出风险**的才写日志（实测 70 个里只有 4 个）。
+	/// 早先是每个状态都写一行，但 70 行里 66 行是 "safe"，信息密度太低，
+	/// 而每行都要付一次栈回溯 + native 写盘 —— 不值当。
+	/// 安全的那些看 RiskyStatuses 名单与 DetectSaveRisk 的判据即可。
 	/// </summary>
 	private static string JudgeSaveRisk(int typeId, AbnormalData data)
 	{
@@ -1534,8 +1578,10 @@ public class Main : MelonMod
 		}
 		string risk = DetectSaveRisk(data);
 		SaveRisks[typeId] = risk;
-		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
-		MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] save-risk scan: " + name + " (" + typeId + ") -> " + (risk ?? "safe"));
+		if (risk != null)
+		{
+			MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] save-risk: " + GetDisplayName(typeId) + " (" + typeId + ") -> " + risk);
+		}
 		return risk;
 	}
 
@@ -1551,10 +1597,50 @@ public class Main : MelonMod
 		return RiskyStatuses.TryGetValue(typeId, out string known) ? known : null;
 	}
 
+	/// <summary>
+	/// 取一个状态在面板上显示的名字 —— 必须与行内显示完全一致。
+	///
+	/// 为什么不直接用 TypeNames.Table：那张表只是**最后一层兜底**。
+	/// 行内的名字走 GetStatusName，它会先问游戏本地化，取不到才轮到表；
+	/// 而警告文案若直接取表，同一个状态就会出现
+	/// 「面板上叫黑暗、提示里写束缚」这种两个名字的情况，玩家会以为是两回事。
+	/// </summary>
+	private static string GetDisplayName(int typeId)
+	{
+		// NameCache 由 CacheRowName 填好，装的正是行内显示用的那个名字。
+		if (NameCache.TryGetValue(typeId, out string cached) && !string.IsNullOrEmpty(cached))
+		{
+			return cached;
+		}
+		// 缓存还没建（这一行还没刷新过）：按 typeId 找到那一行，走同一套解析。
+		for (int i = 0; i < Rows.Count; i++)
+		{
+			StatusRow row = Rows[i];
+			if (row == null || (int)row.Type != typeId)
+			{
+				continue;
+			}
+			try
+			{
+				string resolved = GetStatusName(row, 0);
+				if (!string.IsNullOrEmpty(resolved))
+				{
+					return resolved;
+				}
+			}
+			catch
+			{
+			}
+			break;
+		}
+		// 实在拿不到（行还没建）才退回类型名表。
+		return TypeNames.Table.TryGetValue(typeId, out string fallback) ? fallback : ("ID " + typeId);
+	}
+
 	/// <summary>危险状态第一次被点：只给黄色警告，什么都不做。</summary>
 	private static void WarnRiskyFirstClick(int typeId)
 	{
-		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		string name = GetDisplayName(typeId);
 		string reason = RiskyStatuses.TryGetValue(typeId, out string known) ? known : "有风险";
 		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] risky status first click: " + name + " (" + typeId + ") - " + reason + "; not applied, needs a second click.");
 		ShowHintWarning("⚠ " + name + "：" + reason + "。这个状态可能会导致坏档，建议测试之前先存档 —— 再点一次才会真正开启");
@@ -1563,7 +1649,7 @@ public class Main : MelonMod
 	/// <summary>危险状态第二次被点：转成红色警告，然后放行。</summary>
 	private static void WarnRiskySecondClick(int typeId)
 	{
-		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		string name = GetDisplayName(typeId);
 		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] risky status confirmed by second click: " + name + " (" + typeId + "); applying now.");
 		ShowHintWarning("⚠ 已确认开启「" + name + "」：如果游戏卡住、黑屏或读档失败，请直接重启游戏", armed: true);
 	}
@@ -1571,7 +1657,7 @@ public class Main : MelonMod
 	/// <summary>拼文本、把提示栏点亮成警告色，并写一条 Warning 日志。</summary>
 	private static void ShowSaveRiskWarning(int typeId, string risk)
 	{
-		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		string name = GetDisplayName(typeId);
 		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] SAVE RISK: " + name + " (" + typeId + ") - " + risk + ". Applied anyway; warning only.");
 		ShowHintWarning("⚠ " + name + "：" + risk + "，存档可能作废（已照常开启，请谨慎存档）");
 	}
@@ -1660,7 +1746,9 @@ public class Main : MelonMod
 		{
 			if (UI != null && UI.HintText != null)
 			{
-				UI.HintText.text = "Home / Delete：开关面板\u3000Backspace：关闭\nW/S 选择\u3000A/D 调等级（+/-）\u3000左键/右键点击切换\u3000滚轮滚动";
+				// 文案由 PanelBuilder 按当前布局给（紧凑布局只有一行可用），
+				// 不在这里写死 —— 否则低分辨率下面板会塞进一段放不下的长文案。
+				UI.HintText.text = PanelBuilder.CurrentHint;
 				UI.HintText.color = PanelBuilder.HintColor;
 			}
 		}
@@ -1720,8 +1808,12 @@ public class Main : MelonMod
 			return;
 		}
 		// 危险状态开之前必须点两次：第一次只弹警告、不生效；第二次转红后才真正挂上。
-		// 关闭（targetLevel <= 0）不受影响，照常直接关。
-		if (targetLevel > 0 && RiskyStatuses.ContainsKey(type))
+		//
+		// 为什么必须带 currentLevel <= 0：这里拦的是「从关到开」那一步。
+		// 已经开着的危险状态再按 A/D 调等级时如果也拦，就变成升一级要点两下
+		// （A/D 还支持长按连发），既烦又没意义 —— 风险在开启那一刻就已经承担了。
+		// 关闭（targetLevel <= 0）同样不受影响，照常一下关掉。
+		if (currentLevel <= 0 && targetLevel > 0 && RiskyStatuses.ContainsKey(type))
 		{
 			if (_pendingConfirmType != type)
 			{
@@ -1977,7 +2069,7 @@ public class Main : MelonMod
 			if (_loadRequested.Contains(type))
 			{
 				// 超过 8 秒仍未加载完成，视为请求丢失，允许重新请求。
-				if (_loadRequestTime.TryGetValue(type, out var requestTime) && !(Time.time - requestTime > 8f))
+				if (_loadRequestTime.TryGetValue(type, out var requestTime) && !(Time.time - requestTime > LoadWaitTimeout))
 				{
 					continue;
 				}
@@ -1985,8 +2077,8 @@ public class Main : MelonMod
 				_loadRequestTime.Remove(type);
 			}
 			_loadAttempts.TryGetValue(type, out var attempts);
-			// 每种类型最多自动尝试 3 次。
-			if (attempts < 3)
+			// 每种类型最多自动尝试这么多次，超过就不再重试（避免对着一个加载不了的类型反复发请求）。
+			if (attempts < MaxAutoLoadAttempts)
 			{
 				_loadAttempts[type] = attempts + 1;
 				if (!EnsureTypeLoaded(statusRow.Type))

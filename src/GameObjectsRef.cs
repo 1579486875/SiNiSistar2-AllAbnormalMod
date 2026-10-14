@@ -9,6 +9,20 @@ namespace AllAbnormalMod;
 /// </summary>
 public class GameObjectsRef
 {
+	// ───────────────────────── try/catch 约定 ─────────────────────────
+	// 本文件里很多 catch 是**空**的，这是有意的，不是偷懒：
+	// 模组活在游戏自己的主循环里，任何一处把异常抛出去都可能直接打断
+	// 游戏的初始化或渲染 —— 那比「某个功能失效」严重得多。
+	//
+	// 统一原则：
+	//   · 调用游戏侧接口（Il2Cpp 互操作）一律包 try：拿不到就当作没有，走降级分支；
+	//   · 访问可能为 null 的 Unity 对象前先判空，判空本身失败也吞掉；
+	//   · UI 写入失败只影响显示，绝不影响游戏逻辑。
+	//
+	// 因此**不要**往这些空 catch 里补日志：异常场景下它们可能每帧触发，
+	// 而写日志是同步磁盘 IO（MelonLogger 还会抓调用栈），会把卡顿放大成雪崩。
+	// 确实需要留痕的地方，都在 catch 外面单独判了状态、并且只打一次。
+
 	internal const string BuildTag = "DYJ-CBWP-YD-XL";
 
 	public GameObject Root;
@@ -34,6 +48,16 @@ public class GameObjectsRef
 	public float RowH = 34f;
 
 	public float RowSpacing = 2f;
+
+	/// <summary>
+	/// 面板顶部那块留白的实际高度（紧凑布局下会小一截）。
+	///
+	/// PanelInput 用它判断「点中的是不是标题栏、该不该拖动面板」，
+	/// 所以必须由 PanelBuilder 在建面板时写入，**不能在 PanelInput 里写死**：
+	/// 低分辨率下会切成紧凑布局、留白从 124 缩到 72，
+	/// 写死的话顶部一截可见行会被误当成标题栏，点行变成拖面板。
+	/// </summary>
+	public float TopInset = 124f;
 
 	public float ScrollY;
 

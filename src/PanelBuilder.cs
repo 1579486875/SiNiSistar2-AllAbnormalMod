@@ -15,7 +15,32 @@ namespace AllAbnormalMod;
 /// </summary>
 public static class PanelBuilder
 {
+	// ───────────────────────── try/catch 约定 ─────────────────────────
+	// 本文件里很多 catch 是**空**的，这是有意的，不是偷懒：
+	// 模组活在游戏自己的主循环里，任何一处把异常抛出去都可能直接打断
+	// 游戏的初始化或渲染 —— 那比「某个功能失效」严重得多。
+	//
+	// 统一原则：
+	//   · 调用游戏侧接口（Il2Cpp 互操作）一律包 try：拿不到就当作没有，走降级分支；
+	//   · 访问可能为 null 的 Unity 对象前先判空，判空本身失败也吞掉；
+	//   · UI 写入失败只影响显示，绝不影响游戏逻辑。
+	//
+	// 因此**不要**往这些空 catch 里补日志：异常场景下它们可能每帧触发，
+	// 而写日志是同步磁盘 IO（MelonLogger 还会抓调用栈），会把卡顿放大成雪崩。
+	// 确实需要留痕的地方，都在 catch 外面单独判了状态、并且只打一次。
+
+	/// <summary>
+	/// 面板顶部留白（正常布局）：要给「标题一行 + 提示两行」腾地方。
+	///
+	/// 注意这块留白**同时充当标题栏**（PanelInput 靠它判断该不该拖动面板），
+	/// 所以值必须与 GameObjectsRef.TopInset 保持一致 —— 建面板时会把实际值写进去，
+	/// 不要在 PanelInput 里写死：面板矮时会切紧凑布局、留白缩到 72，
+	/// 写死 124 的话那段多出来的 52px 会被当成标题栏，点那里的状态行会变成拖面板。
+	/// </summary>
 	internal const float ViewTopInset = 124f;
+
+	/// <summary>面板顶部留白（紧凑布局，面板高小于 470 时）：比正常布局矮一截，把纵向空间让给状态列表。</summary>
+	internal const float ViewTopInsetCompact = 72f;
 
 	/// <summary>上次构建面板时的屏幕分辨率。玩家在游戏设置里改了分辨率后，
 	/// Main 会据此销毁并重建面板 —— 否则面板尺寸停留在旧分辨率上、会顶出屏幕。</summary>
@@ -30,9 +55,30 @@ public static class PanelBuilder
 			&& (BuiltScreenW != Screen.width || BuiltScreenH != Screen.height);
 	}
 
+	/// <summary>面板底部留白（正常布局）：给底部那行签名留位置。</summary>
 	private const float ViewBottomInset = 26f;
 
-	internal const string HintDefault = "Home / Delete：开关面板\u3000Backspace：关闭\nW/S 选择\u3000A/D 调等级（+/-）\u3000左键/右键点击切换\u3000滚轮滚动";
+	/// <summary>面板底部留白（紧凑布局）：紧凑布局不显示底部签名，留白可以压到最小。</summary>
+	private const float ViewBottomInsetCompact = 8f;
+
+	/// <summary>
+	/// 提示栏的默认文案（正常布局，两行）。
+	///
+	/// 这是**唯一来源**：面板初次构建与「警告显示满 6 秒后还原」都用它。
+	/// 以前这两处各写了一份、内容还不一样，改一处就会漏另一处。
+	/// </summary>
+	internal const string HintDefault = "Home / Delete：开关面板\u3000Backspace：关闭\nW/S 选择\u3000A/D 调等级（+/-）\u3000左键/右键点击切换\u3000滚轮 / PageUp / PageDown 滚动\u3000End 跳末尾";
+
+	/// <summary>提示栏默认文案（紧凑布局，面板矮、只放得下一行）：压掉次要说明，保留最常用的几个键。</summary>
+	internal const string HintCompact = "Home/Delete 开关\u3000W/S 选择\u3000A/D 调等级\u3000左键切换\u3000滚轮 / PageUp 滚动";
+
+	/// <summary>
+	/// 当前这套面板该用的提示文案（建面板时按紧凑与否定好）。
+	///
+	/// RestoreHint 还原提示栏时要读它 —— 那个方法在 Main 里，
+	/// 它并不知道面板现在是紧凑布局还是正常布局，所以由这里替它记住。
+	/// </summary>
+	internal static string CurrentHint = HintDefault;
 
 	internal static readonly Color HintColor = new Color(1f, 1f, 1f, 0.62f);
 
@@ -465,8 +511,9 @@ public static class PanelBuilder
 		// 面板矮时进入紧凑布局：提示压成一行、不显示分辨率提醒与底部签名，
 		// 把纵向空间让给状态列表（否则 720x360 下顶部区域吃掉一半高度，只剩 9 行可看）。
 		bool compact = panelH < 470f;
-		float topInset = (compact ? 72f : 124f);
-		float bottomInset = (compact ? 8f : 26f);
+		// 两个留白都取常量：PanelInput 判断拖动区时要读同一个数，写死容易改漏。
+		float topInset = (compact ? ViewTopInsetCompact : ViewTopInset);
+		float bottomInset = (compact ? ViewBottomInsetCompact : ViewBottomInset);
 
 		// 顶部一行的横向分配：左边距 12 | 标题 | 间距 8 | 已挂 96 | 间距 8 | 页码 84 | 右边距 12
 		// 标题横向必须用 offsetMin/offsetMax 钉边界（见下面 Title 处注释），
@@ -483,6 +530,9 @@ public static class PanelBuilder
 		ui.RowH = rowH;
 		// 行间距 2px：既能分清相邻行，又不至于把 70 行整体拉得过长
 		ui.RowSpacing = 2f;
+		// 把实际用的顶部留白交出去：PanelInput 判断「点的是不是标题栏」时要读它，
+		// 不能让它自己写死一个数（紧凑布局下会差 52px，见 ViewTopInset 处的说明）。
+		ui.TopInset = topInset;
 		RectTransform panelRt = NewRect("__AllAbnormalMod_Panel__[DYJ-CBWP-YD-XL]", canvas.transform);
 		if (panelRt == null)
 		{
@@ -541,10 +591,11 @@ public static class PanelBuilder
 		if (hintText != null)
 		{
 			hintText.horizontalOverflow = HorizontalWrapMode.Wrap;
-			// 紧凑布局（低分辨率）下只留一行最关键的操作提示，把高度让给列表
-			hintText.text = compact
-				? "Home/Delete 开关\u3000Backspace 关闭\u3000W/S 选择\u3000A/D 调等级\u3000左键点击切换"
-				: "Home / Delete：开关面板\u3000Backspace：关闭\nW/S 选择\u3000A/D 调等级（+/-）\u3000左键/右键点击切换\u3000滚轮滚动";
+			// 紧凑布局（低分辨率）下只留一行最关键的操作提示，把高度让给列表。
+			// 文案取自 PanelBuilder 顶部的两个常量 —— 同时记下这次用的是哪个，
+			// 好让 RestoreHint（在 Main 里）还原时不会把紧凑版又写成正常版。
+			CurrentHint = (compact ? HintCompact : HintDefault);
+			hintText.text = CurrentHint;
 		}
 		ui.HintText = hintText;
 		try
@@ -780,6 +831,9 @@ public static class PanelBuilder
 			{
 				_pendingStart++;
 				builtRows++;
+				// 建成一行就把失败计数清零 —— 上面那个上限判的是「**连续**失败」：
+				// 偶发一两行建不出来不该累加到放弃，只有连着失败才说明 UI 环境真的不能用了。
+				_pendingFail = 0;
 			}
 		}
 		if (!HasPendingRows)

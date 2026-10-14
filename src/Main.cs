@@ -2,7 +2,11 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using Il2Cpp;
+using Il2CppInterop.Runtime;
+using Il2CppInterop.Runtime.InteropTypes;
+using Il2CppInterop.Runtime.InteropTypes.Arrays;
 using Il2CppSiNiSistar2.Lc;
 using Il2CppSiNiSistar2.Manager;
 using Il2CppSiNiSistar2.Manager.Gallery;
@@ -32,6 +36,35 @@ public class Main : MelonMod
 	private const int ProtectionLoss = 912668723;
 
 	internal static readonly HashSet<int> UnavailableTypes = new HashSet<int>();
+
+	// ───────────────────────── 存档危险状态警告 ─────────────────────────
+	// 为什么要有这个：读档时游戏会走 AbnormalList.AbnormalSetup -> AddAbnormal，
+	// 而存档里只存了「类型 + 等级」，没有伤害栈；带 SlipDamage 系扩展的状态
+	// 会在这条路上空引用崩溃，把整个读档流程打断（现象=黑屏、按键全失灵、存档作废）。
+
+	/// <summary>兜底名单：只有在运行时判定失败时才用它。ID 来自实测（玩家存档 + 崩溃日志），不是猜的。</summary>
+	private static readonly System.Collections.Generic.Dictionary<int, string> FallbackSaveRisks = new System.Collections.Generic.Dictionary<int, string>
+	{
+		{ 862086243, "游戏结束专用状态" },
+		{ 1650811237, "游戏结束专用状态" },
+		{ 926180454, "带死亡判定的石化状态" },
+		{ 895628336, "带死亡判定" },
+		{ 1697985080, "带死亡判定" },
+		{ 909468724, "带死亡判定" },
+		{ 960050227, "持续伤害类，读档时会空引用崩溃" },
+		{ 895562034, "持续伤害类，读档时会空引用崩溃" },
+		{ 858940217, "持续伤害类，读档时会空引用崩溃" },
+		{ 892745521, "持续伤害类，读档时会空引用崩溃" }
+	};
+
+	/// <summary>运行时判定结果缓存：typeId -> 风险原因（存 null 表示「已判定为安全」）。</summary>
+	private static readonly System.Collections.Generic.Dictionary<int, string> SaveRisks = new System.Collections.Generic.Dictionary<int, string>();
+
+	/// <summary>本次游戏里已经提醒过的状态，避免同一个状态反复刷提示。</summary>
+	private static readonly System.Collections.Generic.HashSet<int> RiskWarned = new System.Collections.Generic.HashSet<int>();
+
+	/// <summary>「已挂状态里有高危项」这项检查的节流时间。</summary>
+	private static float _riskNoticeCooldown;
 
 	private static bool _loggedBlockedClick;
 
@@ -697,6 +730,14 @@ public class Main : MelonMod
 		catch
 		{
 		}
+		// 面板开着时定期检查「当前挂着的高危状态」，作为第二道提醒。
+		try
+		{
+			StepSaveRiskNotice();
+		}
+		catch
+		{
+		}
 		float time = Time.time;
 		// 游戏侧数据发生变化时才重建激活集合。
 		if (_activeSetDirty && GetAbnormalList() != null)
@@ -857,6 +898,8 @@ public class Main : MelonMod
 					NameCache.Remove((int)statusRow.Type);
 					CacheRowName(statusRow);
 					statusRow.LastName = null;
+					// 数据一到手就顺便判定它的存档风险，把结果记进日志备查。
+					JudgeSaveRisk((int)statusRow.Type, statusRow.Data);
 				}
 			}
 			int currentLevel = 0;
@@ -1317,6 +1360,177 @@ public class Main : MelonMod
 		}
 	}
 
+	/// <summary>
+	/// 取一个 IL2CPP 对象的原生类名（例如 "AbnormalSlipDamage"）。
+	/// 为什么不直接用 C# 的 GetType().Name：这游戏是 IL2CPP 编译的，真正的类型信息
+	/// 在原生那一侧；直接问原生运行时拿到的名字才和游戏源码里的类名完全一致。
+	/// </summary>
+	private static string NativeClassName(Il2CppObjectBase obj)
+	{
+		if (obj == null)
+		{
+			return null;
+		}
+		try
+		{
+			IntPtr klass = IL2CPP.il2cpp_object_get_class(obj.Pointer);
+			if (klass == IntPtr.Zero)
+			{
+				return null;
+			}
+			IntPtr namePtr = IL2CPP.il2cpp_class_get_name(klass);
+			return (namePtr == IntPtr.Zero) ? null : Marshal.PtrToStringAnsi(namePtr);
+		}
+		catch
+		{
+			return null;
+		}
+	}
+
+	/// <summary>
+	/// 现场判定：把一个异常状态写进存档，下次读档会不会崩。
+	/// 返回 null 表示没发现问题；否则返回一句能直接给玩家看的原因。
+	///
+	/// 这个判定是「问游戏自己」而不是查表：游戏给每个状态挂的扩展组件就是它的行为，
+	/// 含 SlipDamage / GameEnd / AutoDead 的都进不了存档，一看一个准，也不会随版本失效。
+	/// </summary>
+	private static string DetectSaveRisk(AbnormalData data)
+	{
+		if (data == null)
+		{
+			return null;
+		}
+		try
+		{
+			Il2CppReferenceArray<AbnormalExtension> extensions = data.m_AbnormalExtensionArray;
+			if (extensions == null)
+			{
+				return null;
+			}
+			for (int i = 0; i < extensions.Length; i++)
+			{
+				AbnormalExtension extension = extensions[i];
+				if (extension == null)
+				{
+					continue;
+				}
+				string className = NativeClassName(extension);
+				if (string.IsNullOrEmpty(className))
+				{
+					continue;
+				}
+				if (className.Contains("SlipDamage"))
+				{
+					return "持续伤害类，写进存档后读档会崩溃";
+				}
+				if (className.Contains("GameEnd"))
+				{
+					return "游戏结束演出类，写进存档后读档会卡住";
+				}
+				if (className.Contains("AutoDead"))
+				{
+					return "自动死亡判定类，写进存档后读档会卡住";
+				}
+			}
+		}
+		catch
+		{
+		}
+		return null;
+	}
+
+	/// <summary>
+	/// 判定并记下一个状态的风险，结果缓存起来（每种状态只判定一次）。
+	/// 顺便把「状态名 + ID + 安全/风险」写进 MelonLoader 日志：
+	/// 出问题时直接翻日志就能看到全表，不用再猜。
+	/// </summary>
+	private static string JudgeSaveRisk(int typeId, AbnormalData data)
+	{
+		if (SaveRisks.TryGetValue(typeId, out string cached))
+		{
+			return cached;
+		}
+		if (data == null)
+		{
+			return null;
+		}
+		string risk = DetectSaveRisk(data);
+		SaveRisks[typeId] = risk;
+		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		MelonLogger.Msg("[AllAbnormalMod][DYJ-CBWP-YD-XL] save-risk scan: " + name + " (" + typeId + ") -> " + (risk ?? "safe"));
+		return risk;
+	}
+
+	/// <summary>查一个状态已知的风险（不触发新判定）。判定过就用判定结果，否则退回兜底名单。</summary>
+	private static string KnownSaveRisk(int typeId)
+	{
+		if (SaveRisks.TryGetValue(typeId, out string judged))
+		{
+			return judged;
+		}
+		return FallbackSaveRisks.TryGetValue(typeId, out string fallback) ? fallback : null;
+	}
+
+	/// <summary>拼文本、把提示栏点亮成警告色，并写一条 Warning 日志。</summary>
+	private static void ShowSaveRiskWarning(int typeId, string risk)
+	{
+		string name = TypeNames.Table.TryGetValue(typeId, out string text) ? text : ("ID " + typeId);
+		MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] SAVE RISK: " + name + " (" + typeId + ") - " + risk + ". Applied anyway; warning only.");
+		ShowHintWarning("⚠ " + name + "：" + risk + "，存档可能作废（已照常开启，请谨慎存档）");
+	}
+
+	/// <summary>
+	/// 玩家刚把一个状态打开时调用：若是高危状态就警告一句。
+	/// 只警告、不阻止 —— 面板照常把它挂上。
+	/// </summary>
+	private static void WarnSaveRiskOnApply(StatusRow row, int typeId)
+	{
+		try
+		{
+			string risk = KnownSaveRisk(typeId);
+			if (risk == null && row != null)
+			{
+				risk = JudgeSaveRisk(typeId, row.Data);
+			}
+			if (risk == null || !RiskWarned.Add(typeId))
+			{
+				return;
+			}
+			ShowSaveRiskWarning(typeId, risk);
+		}
+		catch
+		{
+		}
+	}
+
+	/// <summary>
+	/// 第二道保险：面板开着的时候每秒扫一次「当前已挂的状态」。
+	/// 这样即使高危状态是读档时自带的（不是这次点开的），玩家也能看到警告。
+	/// </summary>
+	private static void StepSaveRiskNotice()
+	{
+		if (Time.time < _riskNoticeCooldown)
+		{
+			return;
+		}
+		_riskNoticeCooldown = Time.time + 1f;
+		if (_activeTypes.Count == 0)
+		{
+			return;
+		}
+		foreach (int typeId in _activeTypes)
+		{
+			string risk = KnownSaveRisk(typeId);
+			if (risk == null || !RiskWarned.Add(typeId))
+			{
+				continue;
+			}
+			ShowSaveRiskWarning(typeId, risk);
+			// 一次只提醒一个，免得连续覆盖提示栏。
+			return;
+		}
+	}
+
 	/// <summary>在面板提示栏显示 6 秒警告文本，到时间由 RestoreHint 还原。</summary>
 	private static void ShowHintWarning(string message)
 	{
@@ -1529,6 +1743,8 @@ public class Main : MelonMod
 		if (targetLevel > 0)
 		{
 			_activeTypes.Add(type);
+			// 刚把这个状态打开：如果是会弄坏存档的那类，立刻提醒（只提醒，不阻止）。
+			WarnSaveRiskOnApply(row, type);
 		}
 		else
 		{

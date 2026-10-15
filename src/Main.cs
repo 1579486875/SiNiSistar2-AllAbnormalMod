@@ -1915,6 +1915,34 @@ public class Main : MelonMod
 					abnormalList.RemoveAbnormal(row.Type);
 				}
 			}
+			else if (targetLevel < currentLevel)
+			{
+				// 降级必须走游戏的 DownAbnormal，不能拿 AddAbnormal 传一个更小的等级。
+				//
+				// AddAbnormal 对**已经挂着**的状态，语义是「升到指定等级」（内部取较高者），
+				// 传更小的值不会把它降下来 —— 这就是「按 A 减不动、只有 Lv1 能按 A 清掉」
+				// 的原因：那时 targetLevel 是 0，走的是上面 RemoveAbnormal 那条路。
+				//
+				// DownAbnormal 一次只降一级，所以按差值循环。
+				int steps = currentLevel - targetLevel;
+				for (int i = 0; i < steps; i++)
+				{
+					abnormalList.DownAbnormal(row.Type);
+				}
+				// 校验一次：游戏那边未必真的降下来了（个别状态可能对降级有内部保护）。
+				// 不一致就记日志 —— 否则会出现「面板显示 Lv2、实际还挂着 Lv4」这种静默错位。
+				try
+				{
+					int levelAfterDown = abnormalList.GetAbnormalLevel(row.Type);
+					if (levelAfterDown != targetLevel)
+					{
+						MelonLogger.Warning("[AllAbnormalMod][DYJ-CBWP-YD-XL] level change did not take effect: type " + type + " wanted Lv" + targetLevel + " but is Lv" + levelAfterDown);
+					}
+				}
+				catch
+				{
+				}
+			}
 			else
 			{
 				abnormalList.AddAbnormal(row.Type, targetLevel);

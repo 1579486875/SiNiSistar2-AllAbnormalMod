@@ -2015,6 +2015,9 @@ public class Main : MelonMod
 		if (row.Data == null)
 		{
 			EnsureTypeLoaded(row.Type);
+			// 光 return 的话屏幕上毫无反馈，玩家会以为点了没反应 / 功能坏了。
+			// 数据是按需加载的，第一次总要等一两秒 —— 告诉他在等什么。
+			ShowHintWarning("这个状态还在加载数据，稍等一下再点一次");
 			return;
 		}
 		int currentLevel = 0;
@@ -2042,6 +2045,8 @@ public class Main : MelonMod
 		if (row.Data == null)
 		{
 			EnsureTypeLoaded(row.Type);
+			// 同 ToggleRow：这里以前是静默 return，按 A/D 会「毫无反应」。
+			ShowHintWarning("这个状态还在加载数据，稍等一下再按一次");
 			return;
 		}
 		int maxLevel = 1;

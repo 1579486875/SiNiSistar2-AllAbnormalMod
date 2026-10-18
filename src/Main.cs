@@ -2016,8 +2016,8 @@ public class Main : MelonMod
 		{
 			EnsureTypeLoaded(row.Type);
 			// 光 return 的话屏幕上毫无反馈，玩家会以为点了没反应 / 功能坏了。
-			// 数据是按需加载的，第一次总要等一两秒 —— 告诉他在等什么。
-			ShowHintWarning("这个状态还在加载数据，稍等一下再点一次");
+			// 文案按「还在加载 / 已放弃重试」分开给，见 LoadingHintFor。
+			ShowHintWarning(LoadingHintFor((int)row.Type));
 			return;
 		}
 		int currentLevel = 0;
@@ -2035,6 +2035,23 @@ public class Main : MelonMod
 		ApplyLevel(row, (currentLevel <= 0) ? 1 : 0);
 	}
 
+	/// <summary>
+	/// 数据还没到手时给玩家的提示。
+	///
+	/// 要分两种情况，不能一句话打发：
+	///   · 正在加载 —— 再等一两秒就好；
+	///   · 已经放弃重试（状态栏显示 ✗）—— 再怎么等也不会自己好，
+	///     得关掉面板再打开才会重置重试次数。
+	/// 只说「还在加载」的话，第二种情况的玩家会一直等下去。
+	/// </summary>
+	private static string LoadingHintFor(int type)
+	{
+		bool gaveUp = _loadAttempts.TryGetValue(type, out int attempts) && attempts >= MaxAutoLoadAttempts;
+		return gaveUp
+			? "这个状态加载不出来了，关掉面板再打开会重新尝试"
+			: "这个状态还在加载数据，稍等一下再按一次";
+	}
+
 	/// <summary>按方向增减等级（dir 为 +1 或 -1），结果夹在 0 与最大等级之间。</summary>
 	internal static void AdjustRowLevel(StatusRow row, int dir)
 	{
@@ -2046,7 +2063,7 @@ public class Main : MelonMod
 		{
 			EnsureTypeLoaded(row.Type);
 			// 同 ToggleRow：这里以前是静默 return，按 A/D 会「毫无反应」。
-			ShowHintWarning("这个状态还在加载数据，稍等一下再按一次");
+			ShowHintWarning(LoadingHintFor((int)row.Type));
 			return;
 		}
 		int maxLevel = 1;

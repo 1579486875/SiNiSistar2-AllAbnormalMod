@@ -382,6 +382,18 @@ MelonLoader 控制台与场景层级里。四段碎片常量是额外的一层�
 
 ## 更新记录
 
+### v1.0.24
+
+- **安装器现在会检查游戏路径里有没有非英文字符**。MelonLoader 的引导层用 ANSI 路径去定位
+  `UnityPlayer.dll`，路径里只要有中文（或日文、俄文……）就必然失败 —— 表现是「装好了，
+  但按 `Home` / `Delete` 毫无反应」，`MelonLoader\Latest.log` 只有一行 `plthook_open error`。
+  这是 MelonLoader 自身的 bug（[issue #910](https://github.com/LavaGang/MelonLoader/issues/910)，
+  0.7.1 → 0.7.3 一直没修），与本 Mod 无关。安装器现在会在复制文件前先用红字警告并默认取消
+- 「安装」章节最前面加了「游戏必须放在纯英文路径下」+ 正反例
+- 新增 `tools\收集诊断信息.bat`：玩家自查脚本，出问题时可以一键把日志和配置打包
+- 顺带核对了 **v1.3.0** 的兼容性：用 Cpp2IL 反编译 1.3.0 的 `GameAssembly.dll` 逐项比对，
+  70 个 `AbnormalType` 的 ID 与 `AbnormalList` 的全部接口方法均与 1.3.1 一致，无需单独适配
+
 ### v1.0.23
 
 - 把「数据没加载好」的提示再细分一层。状态栏显示 `✗` 的那些表示**自动重试已用尽**，

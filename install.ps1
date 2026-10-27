@@ -405,8 +405,54 @@ function Remove-NestedResidue($gameDir) {
     }
 }
 
+# MelonLoader 0.7.x 的 bootstrap 用 ANSI 路径去定位 UnityPlayer.dll，
+# 路径里只要有一个非 ASCII 字符（中文、日文、俄文……）就会失败。
+# 现象：安装一路成功，但进游戏后按 Home / Delete 毫无反应，Mod 一次都没被加载；
+#       MelonLoader\Latest.log 只有一行 plthook_open error: Cannot get module ...
+# 这是 MelonLoader 自己的 bug（官方 issue #910，0.7.1 到 0.7.3 一直没修），
+# 与本 Mod 无关，只能在安装环节提前拦住，让玩家先把路径改掉。
+function Test-NonAsciiPath([string]$dir) {
+    if ([string]::IsNullOrEmpty($dir)) { return $false }
+    foreach ($ch in $dir.ToCharArray()) {
+        if ([int]$ch -gt 127) { return $true }
+    }
+    return $false
+}
+
 function Install-Into($gameDir) {
     $srcRoot = Join-Path $PSScriptRoot "ModData"
+
+    if ((Test-NonAsciiPath $gameDir) -and -not $DryRun) {
+        Write-Host ""
+        Write-Host "==========================================================" -ForegroundColor Red
+        Write-Host "  【重要】这个游戏路径里有中文或其他非英文字符" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "    $gameDir" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  MelonLoader 遇到这种路径会启动失败 —— 文件能装进去，" -ForegroundColor Yellow
+        Write-Host "  但进游戏后按 Home / Delete 不会有任何反应。" -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  这是 MelonLoader 自身的 bug（官方 issue #910，至今未修），" -ForegroundColor DarkGray
+        Write-Host "  与本 Mod 无关。解决办法：" -ForegroundColor DarkGray
+        Write-Host "    1. 关掉本安装器" -ForegroundColor White
+        Write-Host "    2. 把游戏文件夹改成纯英文名，或整个移到纯英文路径" -ForegroundColor White
+        Write-Host "       （例：D:\Games\SiNiSistar2）" -ForegroundColor DarkGray
+        Write-Host "    3. 再运行一次 install.bat" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  只改文件夹名不会丢存档，也不用重新下载游戏。" -ForegroundColor DarkGray
+        Write-Host "==========================================================" -ForegroundColor Red
+        Write-Host ""
+        $go = "n"
+        try { $go = Read-Host "  仍然要装到这个目录吗？（装好后面板一样打不开）(y/N)" } catch { }
+        if ($go -ne "y" -and $go -ne "Y") {
+            Write-Host ""
+            Write-Host "  已取消。请先把游戏移到纯英文路径，再运行安装器。" -ForegroundColor Yellow
+            Write-Host ""
+            return
+        }
+        Write-Host ""
+        Write-Host "  继续安装。路径问题仍然存在，这一步需要你自己改。" -ForegroundColor Yellow
+    }
     $newVer = Get-DllVersion (Join-Path $srcRoot "Mods\AllAbnormalMod.dll")
     $oldVer = Get-DllVersion (Join-Path $gameDir "Mods\AllAbnormalMod.dll")
     $isUpdate = ($null -ne $oldVer)

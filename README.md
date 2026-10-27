@@ -61,6 +61,23 @@
 
 ## 安装
 
+> ### ⚠️ 安装前先确认游戏路径
+>
+> **游戏必须放在纯英文路径下。** 路径里只要有一个中文（或日文、俄文……），MelonLoader 就会在启动时失败：
+> 安装器说装好了，但进游戏按 `Home` / `Delete` 完全没反应 —— Mod 一次都没被加载过。
+>
+> 这是 MelonLoader 自身的 bug（[官方 issue #910](https://github.com/LavaGang/MelonLoader/issues/910)，
+> 0.7.1 → 0.7.3 一直没修），与本 Mod 无关。
+>
+> | | 路径示例 |
+> | --- | --- |
+> | ❌ | `D:\游戏\SiNiSistar 2` |
+> | ❌ | `D:\Steam\...\workshop\content\431960\sinisisters\游戏在这里面\SiNiSistar 2` |
+> | ✅ | `D:\Games\SiNiSistar2` |
+> | ✅ | `E:\SteamLibrary\steamapps\common\SiNiSistar 2` |
+>
+> 安装器会自动检查，发现非英文字符时先用红字警告。只改文件夹名不会丢存档，也不用重新下载游戏。
+
 1. 双击运行本文件夹里的 `install.bat`
 2. 安装器自动查找游戏目录：先读 Steam 注册表与 `libraryfolders.vdf`，再查卸载注册表，
    然后扫各盘符和用户目录（下载 / 桌面 / 文档）；都找不到时才让你手动填

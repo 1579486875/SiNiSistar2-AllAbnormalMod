@@ -411,6 +411,23 @@ function Remove-NestedResidue($gameDir) {
 #       MelonLoader\Latest.log 只有一行 plthook_open error: Cannot get module ...
 # 这是 MelonLoader 自己的 bug（官方 issue #910，0.7.1 到 0.7.3 一直没修），
 # 与本 Mod 无关，只能在安装环节提前拦住，让玩家先把路径改掉。
+# 把 Loader.cfg 里的 force_offline_generation 从 false 改成 true。
+# MelonLoader 每次启动都会去 api.melonloader.com 查现成的调试缓存，而本作在官方
+# API 上返回 Game Not Found，国内还经常解析不了域名 —— 纯属白等，控制台里还多一行
+# 「不知道这样的主机」。我们的包内置了离线依赖，用不上它，所以顺手关掉。
+# 逐字节读、按原编码写回，只动这一行，BOM / 换行 / 其余内容都不碰。
+function Set-OfflineGeneration([string]$cfgPath) {
+    try {
+        $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($cfgPath))
+        $new = [regex]::Replace($text, '(?m)^([ \t]*force_offline_generation[ \t]*=[ \t]*)false([ \t]*)(\r?)$', '${1}true${2}${3}')
+        if ($new -ceq $text) { return $false }
+        [System.IO.File]::WriteAllText($cfgPath, $new, (New-Object System.Text.UTF8Encoding($false)))
+        return $true
+    } catch {
+        return $false
+    }
+}
+
 function Test-NonAsciiPath([string]$dir) {
     if ([string]::IsNullOrEmpty($dir)) { return $false }
     foreach ($ch in $dir.ToCharArray()) {
@@ -481,7 +498,7 @@ function Install-Into($gameDir) {
         Write-Host "  [清理] 发现旧版安装器留下的嵌套目录 MelonLoader\MelonLoader\，已删除" -ForegroundColor Yellow
     }
 
-    Write-Host "[1/3] 同步 MelonLoader 运行框架（含离线 IL2CPP 依赖）..."
+    Write-Host "[1/4] 同步 MelonLoader 运行框架（含离线 IL2CPP 依赖）..."
     # version.dll 有 11 MB，同版本重复运行时没必要再写一遍：大小一致就跳过
     $verSrc = Join-Path $srcRoot "version.dll"
     $verDst = Join-Path $gameDir "version.dll"
@@ -490,15 +507,26 @@ function Install-Into($gameDir) {
     }
     $r1 = Sync-Tree (Join-Path $srcRoot "MelonLoader") (Join-Path $gameDir "MelonLoader")
     Write-Host "      写入 $($r1.Copied) 个，跳过 $($r1.Skipped) 个已是最新的"
-    Write-Host "[2/3] 安装 Mod 插件..."
+    Write-Host "[2/4] 安装 Mod 插件..."
     $modDir = Join-Path $gameDir "Mods"
     if (-not (Test-Path $modDir)) { New-Item -ItemType Directory -Path $modDir -Force | Out-Null }
     Copy-Item (Join-Path $srcRoot "Mods\AllAbnormalMod.dll") (Join-Path $modDir "AllAbnormalMod.dll") -Force
-    Write-Host "[3/3] 安装简体中文语言包..."
+    Write-Host "[3/4] 安装简体中文语言包..."
     $lcDir = Join-Path $gameDir "Mod\Localize\ZH_CN"
     if (-not (Test-Path $lcDir)) { New-Item -ItemType Directory -Path $lcDir -Force | Out-Null }
     $r3 = Sync-Tree (Join-Path $srcRoot "Localize\ZH_CN") $lcDir
     Write-Host "      写入 $($r3.Copied) 个，跳过 $($r3.Skipped) 个已是最新的"
+    Write-Host "[4/4] 检查 MelonLoader 配置..."
+    $loaderCfg = Join-Path $gameDir "UserData\Loader.cfg"
+    if (Test-Path $loaderCfg) {
+        if (Set-OfflineGeneration $loaderCfg) {
+            Write-Host "      已关闭 RemoteAPI 联网检查（force_offline_generation: false -> true）"
+        } else {
+            Write-Host "      RemoteAPI 联网检查已是关闭状态，跳过"
+        }
+    } else {
+        Write-Host "      游戏还没跑过（没有 UserData\Loader.cfg），首次启动后 MelonLoader 会自己生成，跳过"
+    }
     Write-Host ""
     if ($isUpdate) {
         if ($oldVer -eq $newVer) { Write-Host "校验完成！当前版本 v$newVer" -ForegroundColor Green }

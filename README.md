@@ -399,6 +399,15 @@ MelonLoader 控制台与场景层级里。四段碎片常量是额外的一层�
 
 ## 更新记录
 
+### v1.0.25
+
+- **安装器顺手关掉 MelonLoader 的 RemoteAPI 联网检查**。MelonLoader 每次启动都会去
+  `api.melonloader.com` 查现成的调试缓存，连不上就抛 `WebException`，控制台里多一行红字
+  「不知道这样的主机」；而这个游戏在官方 API 上本来就返回 `Game Not Found`，联网纯属白等。
+  安装器现在会检查 `UserData\Loader.cfg`，把 `force_offline_generation` 从 `false` 改成 `true`
+  （文件不存在则跳过，让 MelonLoader 自己生成）。改的时候只动这一行，BOM 与换行保持原样
+- 常见问题新增「每次启动弹出的黑框里有红字，写着『不知道这样的主机』？」
+
 ### v1.0.24
 
 - **安装器现在会检查游戏路径里有没有非英文字符**。MelonLoader 的引导层用 ANSI 路径去定位

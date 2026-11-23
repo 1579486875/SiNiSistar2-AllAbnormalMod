@@ -331,19 +331,19 @@ MelonLoader\  （文件夹）
 
 | 路径 | 用途 |
 | --- | --- |
-| `src/` | Mod 源码（C# / net6.0）与 `AllAbnormalMod.csproj` |
+| `源码/` | Mod 源码（C# / net6.0）与 `AllAbnormalMod.csproj` |
 | `ModData/` | 发布树：MelonLoader 运行时、Mod 本体、简体中文语言包 |
 | `install.bat`、`install.ps1` | 安装器 |
 | `更新公告.txt` | 最近一次更新的公告 |
 
-发布包 zip **只包含玩家需要的部分，不含 `src/`**。
+发布包 zip **只包含玩家需要的部分，不含 `源码/`**。
 
 ### 自己编译
 
 需要 .NET SDK，以及一份已经运行过游戏、生成好 `MelonLoader/Il2CppAssemblies/` 的游戏目录：
 
 ```
-dotnet build src/AllAbnormalMod.csproj -c Release -p:GameDir="D:\Games\SiNiSistar 2"
+dotnet build 源码/AllAbnormalMod.csproj -c Release -p:GameDir="D:\Games\SiNiSistar 2"
 ```
 
 省略 `-p:GameDir` 时会自动探测 Steam 默认安装位置。
@@ -353,16 +353,16 @@ dotnet build src/AllAbnormalMod.csproj -c Release -p:GameDir="D:\Games\SiNiSista
 > 编译过去、报出莫名其妙的类型错误）。稳妥写法是用数组传参：
 >
 > ```powershell
-> $a = @('build','src/AllAbnormalMod.csproj','-c','Release',"-p:GameDir=$game")
+> $a = @('build','源码/AllAbnormalMod.csproj','-c','Release',"-p:GameDir=$game")
 > dotnet @a
 > ```
 
-> **另一个坑**：`AllAbnormalMod.csproj` 必须留在 `src/` 里，不要挪到仓库根。
+> **另一个坑**：`AllAbnormalMod.csproj` 必须留在 `源码/` 里，不要挪到仓库根。
 > MSBuild 默认的 `AssemblySearchPaths` 会按文件名去**项目目录及其子目录**找同名程序集，
 > 而 `ModData/MelonLoader/Dependencies/Il2CppAssemblyGenerator/UnityDependencies/` 下
 > 放着 Cpp2IL 用的**原生版** `UnityEngine*.dll` —— 一旦它们被搜到，就会盖掉
 > HintPath 指定的 Il2Cpp 版，症状是编译报 `CS0029`（`Resources.FindObjectsOfTypeAll<T>()`
-> 被解析成返回 `T[]`）。把工程放进 `src/` 后项目目录里没有发布树，问题自然消失。
+> 被解析成返回 `T[]`）。把工程放进 `源码/` 后项目目录里没有发布树，问题自然消失。
 
 ## 技术说明
 
@@ -386,7 +386,7 @@ dotnet build src/AllAbnormalMod.csproj -c Release -p:GameDir="D:\Games\SiNiSista
 - 游戏内对象名：`__AllAbnormalMod_Canvas__[DYJ-CBWP-YD-XL]` 等
 - 屏蔽清单文件：文件头与每行注释都带署名标记
 - 程序集信息：作者字段就是完整署名
-- 源码内部：`Signature.cs` 里有完整署名，另有四段碎片常量（`A1`~`A4`）；
+- 源码内部：`签名.cs` 里有完整署名，另有四段碎片常量（`A1`~`A4`）；
   此外各文件还零散带着类型标签（`TypeNames.TableSource`、`StatusRow.RowTag`、
   `PanelInput.InputTag`、`GameObjectsRef.BuildTag`、`PanelBuilder.PanelRootName`）
 
